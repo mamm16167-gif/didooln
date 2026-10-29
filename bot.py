@@ -71,9 +71,10 @@ X_VERSION_FREE = "1.5.17"
 X_SIG_FREE = "c66054ba6166fe08d1a6a702fb10b151102a6f4ef058fcf3d995ee511ff0d267"
 
 # ==================== نظام البروكسي (الافتراضي - يبقى كما هو) ====================
-PROXY_USER_BASE = "5753274-c4b102d3f4-DZ_Bouira-session"
-PROXY_USER_SUFFIX = "life-5m:f9827c3767"
-PROXY_HOST = "gate-us.owlproxy.com:1000"
+DEFAULT_PROXY_URL = "http://jxhiyvg5b9-pool-all:zz4urytkhf@premium-residential.serpproxies.com:8080"
+PROXY_POOL_FILE = Path(os.environ.get("PROXY_POOL_FILE", str(Path(__file__).with_name("proxy_pool.txt"))))
+_proxy_pool = []
+_proxy_pool_index = [0]
 _current_session = ["31298419"]
 _proxy_rotate_lock = threading.Lock()
 _last_rotate_time = [0.0]
@@ -82,10 +83,22 @@ _proxy_fail_count = [0]
 _proxy_fail_until = [0.0]
 _proxy_fail_lock = threading.Lock()
 
+def _load_proxy_pool():
+    if _proxy_pool:
+        return _proxy_pool
+    try:
+        rows = [x.strip() for x in PROXY_POOL_FILE.read_text(encoding="utf-8").splitlines() if x.strip()]
+        _proxy_pool.extend(x if x.startswith("http://") else "http://" + x for x in rows)
+    except Exception as e:
+        logging.warning(f"[PROXY-POOL] تعذر قراءة الملف: {e}")
+    if not _proxy_pool:
+        _proxy_pool.append(DEFAULT_PROXY_URL)
+    return _proxy_pool
+
 def _build_proxy_url():
+    pool = _load_proxy_pool()
     with _proxy_rotate_lock:
-        sess = _current_session[0]
-    return f"http://{PROXY_USER_BASE}-{sess}-{PROXY_USER_SUFFIX}@{PROXY_HOST}"
+        return pool[_proxy_pool_index[0] % len(pool)]
 
 def _rotate_proxy_session(force=False):
     with _proxy_rotate_lock:
@@ -93,9 +106,10 @@ def _rotate_proxy_session(force=False):
         if not force and now - _last_rotate_time[0] < ROTATE_COOLDOWN:
             return False
         _last_rotate_time[0] = now
-        _current_session[0] = ''.join(random.choices(string.digits, k=8))
-        new_id = _current_session[0]
-    logging.warning(f"[PROXY] 🔄 Rotated → session-{new_id}")
+        pool = _load_proxy_pool()
+        _proxy_pool_index[0] = (_proxy_pool_index[0] + 1) % len(pool)
+        new_id = _proxy_pool_index[0] + 1
+    logging.warning(f"[PROXY] 🔄 Switched global pool proxy → #{new_id}/{len(pool)}")
     return True
 
 def _should_use_proxy():
@@ -226,9 +240,12 @@ def activate_proxy_url(url, name=None, ip=None):
     return proxy_name
 
 def _get_active_proxy():
-    """يرجع البروكسي النشط الوحيد من DB، وإلا البروكسي المدمج، وإلا None."""
+    """يرجع البروكسي الحالي من Pool العام؛ نفس البروكسي يستمر حتى يفشل."""
     if not _should_use_proxy():
         return None
+    pool_proxy = _build_proxy_url()
+    if pool_proxy:
+        return pool_proxy
     try:
         row = db_query("SELECT url FROM proxies WHERE active=1 ORDER BY is_default DESC, id ASC LIMIT 1", fetch=True)
         if row and row[0]:
@@ -314,8 +331,8 @@ def _oo_req(method, url, headers, content=b"", timeout=12, use_proxy=True):
         report_admin_alert("خادم Ooredoo لا يجيب", f"{method} {url[:100]}\n{e}")
         return 0, {}, {"_error": str(e)[:100]}
 
-def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, timeout=10):
-    proxy_url = _get_active_proxy()
+def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, timeout=10, use_proxy=True):
+    proxy_url = _get_active_proxy() if use_proxy else None
     if proxy_url:
         try:
             s = _new_session(headers, use_proxy=True)
@@ -487,7 +504,7 @@ def dj_request_otp(phone):
         h = DJ_HEADERS.copy()
         h['User-Agent'] = ua
         try:
-            r = _dz_req("POST", url, headers=h, params=params, json_body=payload, timeout=10)
+            r = _dz_req("POST", url, headers=h, params=params, json_body=payload, timeout=10, use_proxy=True)
             if r is None: continue
             logging.info(f"[DJ-OTP] {phone} UA={ua} (try {attempt}) → {r.status_code}")
             if r.status_code == 200: return True
@@ -506,7 +523,7 @@ def dj_verify_otp(phone, otp):
                'client_id': DJ_CLIENT_ID, 'client_secret': DJ_CLIENT_SECRET, 'grant_type': "mobile"}
     h = DJ_HEADERS.copy(); h['Content-Type'] = "application/x-www-form-urlencoded"
     for i in range(3):
-        r = _dz_req("POST", url, headers=h, data=payload, timeout=20)
+        r = _dz_req("POST", url, headers=h, data=payload, timeout=20, use_proxy=True)
         if r is None: time.sleep(2); continue
         logging.info(f"[DJ-VERIFY] {phone} → {r.status_code}")
         if r.status_code == 200:
@@ -750,7 +767,7 @@ def ooredoo_send_otp_sync(msisdn):
                    "x-native-integrity-token": INTEGRITY_1,
                    "x-path": "/api/auth/realms/myooredoo/protocol/openid-connect/token",
                    "x-method": "POST"})
-        _, rh3, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h3, b"{}", timeout=10)
+        _, rh3, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h3, b"{}", timeout=10, use_proxy=True)
         nonce = rh3.get("x-nonce-id") or rh3.get("X-Nonce-Id") or ""
         chronos = rh3.get("x-chronos-id") or rh3.get("X-Chronos-Id") or ""
     except: pass
@@ -763,15 +780,26 @@ def ooredoo_send_otp_sync(msisdn):
         if nonce: h4["x-nonce-id"] = nonce
         if chronos: h4["x-chronos-id"] = chronos
         body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}"
-        c4, _, _ = _oo_req("POST", OO_AUTH, h4, body, timeout=15)
-        logging.info(f"[OO-OTP] {msisdn} → {c4}")
+        c4, _, j4 = _oo_req("POST", OO_AUTH, h4, body, timeout=15, use_proxy=True)
+        logging.info(f"[OO-OTP-DIRECT] {msisdn} → {c4}")
+        if c4 in (200, 201, 202):
+            body_text = json.dumps(j4, ensure_ascii=False).lower() if j4 is not None else ""
+            failure_words = ("error", "invalid", "denied", "blocked", "failed", "failure", "refused")
+            if isinstance(j4, dict) and any(word in body_text for word in failure_words):
+                report_admin_alert("Ooredoo قبل HTTP لكن رفض OTP", f"رد الخادم: {body_text[:500]}")
+                return {"device": device, "otp_sent": False, "status": c4, "reason": "server"}
+            return {"device": device, "otp_sent": True, "status": c4}
         if c4 == 429:
             report_admin_alert("فشل إرسال رمز Ooredoo", "الخدمة رجعت 429 (تقييد مؤقت).")
             return {"device": device, "otp_sent": False, "status": 429, "reason": "rate_limit"}
+        if c4 in (401, 403):
+            report_admin_alert("رفض Ooredoo إرسال الرمز", f"الخادم رجع HTTP {c4} لطلب OTP.")
+            return {"device": device, "otp_sent": False, "status": c4, "reason": "rejected"}
         if c4 == 0:
             report_admin_alert("فشل إرسال رمز Ooredoo", "لا توجد استجابة من الخادم.")
             return {"device": device, "otp_sent": False, "status": 0, "reason": "network"}
-        return {"device": device, "otp_sent": True, "status": c4}
+        report_admin_alert("فشل إرسال رمز Ooredoo", f"الخادم رجع HTTP {c4} لطلب OTP.")
+        return {"device": device, "otp_sent": False, "status": c4, "reason": "server"}
     except Exception as e:
         logging.error(f"❌ OOREDOO OTP: {e}")
         report_admin_alert("فشل إرسال رمز Ooredoo", str(e))
@@ -789,7 +817,7 @@ def ooredoo_verify_otp_sync(msisdn, otp, device):
         h6.update({"content-type":"application/json; charset=utf-8",
                    "x-native-integrity-token":INTEGRITY_1,
                    "x-path":"/api/auth/realms/myooredoo/protocol/openid-connect/token","x-method":"POST"})
-        _, rh6, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h6, b"{}", timeout=10)
+        _, rh6, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h6, b"{}", timeout=10, use_proxy=True)
         nonce = rh6.get("x-nonce-id") or rh6.get("X-Nonce-Id") or ""
         chronos = rh6.get("x-chronos-id") or rh6.get("X-Chronos-Id") or ""
     except: pass
@@ -801,7 +829,7 @@ def ooredoo_verify_otp_sync(msisdn, otp, device):
     if nonce: h7["x-nonce-id"] = nonce
     if chronos: h7["x-chronos-id"] = chronos
     body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}&otp={otp}"
-    c7, _, j7 = _oo_req("POST", OO_AUTH, h7, body, timeout=15)
+    c7, _, j7 = _oo_req("POST", OO_AUTH, h7, body, timeout=15, use_proxy=True)
     logging.info(f"[OO-VERIFY] {msisdn} → {c7}")
     if c7 == 200 and isinstance(j7, dict) and "access_token" in j7:
         at = j7["access_token"]
@@ -822,7 +850,7 @@ def ooredoo_refresh_token_sync(msisdn, rt, device):
     h.update({"content-type":"application/x-www-form-urlencoded",
               "x-native-integrity-token":INTEGRITY_1,
               "x-path":"/api/auth/realms/myooredoo/protocol/openid-connect/token","x-method":"POST"})
-    _, rh, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h, b"{}", timeout=10)
+    _, rh, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h, b"{}", timeout=10, use_proxy=True)
     nonce = rh.get("x-nonce-id") or rh.get("X-Nonce-Id") or ""
     chronos = rh.get("x-chronos-id") or rh.get("X-Chronos-Id") or ""
     if not nonce or not chronos: return None
@@ -832,7 +860,7 @@ def ooredoo_refresh_token_sync(msisdn, rt, device):
           "x-timestamp":ts,"x-platform-info":psig,"x-force-update":"true","x-instance-id":iid_val,
           "content-type":"application/x-www-form-urlencoded"}
     body = f"client_id={OO_CLIENT}&grant_type=refresh_token&refresh_token={rt}"
-    c2, _, j2 = _oo_req("POST", OO_AUTH, h2, body, timeout=15)
+    c2, _, j2 = _oo_req("POST", OO_AUTH, h2, body, timeout=15, use_proxy=True)
     if c2 == 200 and "access_token" in j2:
         at = j2["access_token"]
         return {"access_token": at, "refresh_token": j2.get("refresh_token", rt),
@@ -1436,7 +1464,7 @@ def _proxy_proactive_rotate():
     while not _stop_threads.is_set():
         try:
             time.sleep(25 * 60)
-            _rotate_proxy_session(force=True)
+            logging.info("[PROXY] Sticky pool session مستمرة؛ لا يوجد تبديل دوري")
         except: pass
 
 # ==================== نصوص ====================
@@ -1445,9 +1473,9 @@ WELCOME_HEADER = ("مرحبا بك في موح بوت 👋\n\n"
     "1️⃣ • أدخل الرقم 📱\n2️⃣ • أكمل الخطوات ✅\n"
     "3️⃣ • إختر عرض مناسب 🛒\n4️⃣ • انتظار الرد ... 🔍")
 WELCOME_FOOTER = "للبدء أرسل رقم هاتفك 📱"
-OTP_MSG = ("✅ <b>تم إرسال الرمز بنجاح</b>\n\n"
-           "📩 تفقد رسائل هاتفك، ثم أرسل الرمز المكوّن من 6 أرقام هنا 📱\n"
-           "⏱️ الرمز صالح لفترة محدودة.")
+OTP_MSG = ("✅ <b>تم قبول طلب إرسال الرمز من الخادم</b>\n\n"
+           "📩 إذا وصلتك الرسالة، أرسل الرمز المكوّن من 6 أرقام هنا 📱\n"
+           "⏱️ إذا ما وصلش خلال لحظات، استعمل إعادة الإرسال أو جرّب لاحقاً.")
 
 SOCCER_CLUB_NAMES = {
     "MCA": "مولودية الجزائر", "MCO": "مولودية وهران", "JSS": "شبيبة الساورة",
@@ -2179,6 +2207,7 @@ async def cb_handler(call):
             if not result.get("otp_sent"):
                 r = result.get("reason", ""); code = result.get("status", "?")
                 if r == "rate_limit": msg = "⏳ <b>محاولات كثيرة</b>\n\n🔄 انتظر 60 ثانية"
+                elif r == "rejected": msg = "❌ <b>الخادم رفض إرسال الرمز حالياً</b>\n\n💡 جرّب بعد قليل أو بدّل الشبكة"
                 elif r == "network": msg = "❌ <b>مشكل في الاتصال</b>"
                 else: msg = f"❌ <b>تعذر الإرسال</b>\n\n💡 كود: <code>{code}</code>"
                 await bot.send_message(uid, msg, parse_mode='HTML'); return
@@ -2561,6 +2590,7 @@ async def handle_text(message):
             if not result.get("otp_sent"):
                 r = result.get("reason", ""); code = result.get("status", "?")
                 if r == "rate_limit": msg = "⏳ محاولات كثيرة، انتظر 60 ثانية"
+                elif r == "rejected": msg = "❌ الخادم رفض إرسال الرمز حالياً، حاول بعد قليل"
                 elif r == "network": msg = "❌ مشكل في الاتصال"
                 else: msg = f"❌ تعذر الإرسال\n💡 كود: {code}"
                 user_steps[uid] = {"step": "await_phone", "last_activity": now}
