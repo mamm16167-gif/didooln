@@ -1308,6 +1308,20 @@ def time_until_spin(last):
 
 _stop_threads = threading.Event()
 
+def _start_resilient_worker(name, target):
+    """تشغيل عامل خلفي مع إعادة تشغيله تلقائياً إذا خرج بسبب خطأ غير متوقع."""
+    def runner():
+        while not _stop_threads.is_set():
+            try:
+                target()
+            except Exception:
+                logging.exception(f"[WORKER-CRASH] {name} توقف؛ إعادة المحاولة بعد 5 ثوانٍ")
+            if not _stop_threads.is_set():
+                _stop_threads.wait(5)
+    thread = threading.Thread(target=runner, name=name, daemon=True)
+    thread.start()
+    return thread
+
 def oo_auto_refresh():
     while not _stop_threads.is_set():
         try:
@@ -3342,14 +3356,24 @@ async def main():
     saved = load_steps_saved()
     user_steps.update(saved)
     print(f"📥 {len(saved)} حالة")
-    threading.Thread(target=oo_auto_refresh, daemon=True).start()
-    threading.Thread(target=dz_auto_refresh, daemon=True).start()
-    threading.Thread(target=steps_saver_worker, daemon=True).start()
-    threading.Thread(target=reset_steps_worker, daemon=True).start()
-    threading.Thread(target=_proxy_proactive_rotate, daemon=True).start()
+    _start_resilient_worker("oo_auto_refresh", oo_auto_refresh)
+    _start_resilient_worker("dz_auto_refresh", dz_auto_refresh)
+    _start_resilient_worker("steps_saver", steps_saver_worker)
+    _start_resilient_worker("reset_steps", reset_steps_worker)
+    _start_resilient_worker("proxy_rotate", _proxy_proactive_rotate)
     print("🔄 خيوط جاهزة")
     print("✅ البوت يعمل الآن...")
-    await bot.infinity_polling(skip_pending=True, timeout=30)
+    while not _stop_threads.is_set():
+        try:
+            await bot.infinity_polling(skip_pending=True, timeout=30)
+            logging.warning("[POLLING] انتهى الاتصال بدون استثناء؛ إعادة الاتصال بعد 3 ثوانٍ")
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as e:
+            logging.exception(f"[POLLING-CRASH] {e} — إعادة الاتصال بعد 8 ثوانٍ")
+            print(f"⚠️ Polling error: {e}; reconnecting in 8s", flush=True)
+        if not _stop_threads.is_set():
+            await asyncio.sleep(8)
 
 if __name__ == "__main__":
     try:
