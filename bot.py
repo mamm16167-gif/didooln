@@ -81,14 +81,14 @@ ROTATE_COOLDOWN = 3
 _proxy_fail_count = [0]
 _proxy_fail_until = [0.0]
 _proxy_fail_lock = threading.Lock()
-# بروكسي واحد لا يتحمل طلبات متزامنة كثيرة؛ الطلبات الأخرى تنتظر دورها.
-_PROXY_REQUEST_GATE = threading.BoundedSemaphore(value=1)
-_PROXY_MIN_INTERVAL = 10.0
+# نفس توازن النسخة القديمة: أربع طلبات متزامنة مع Pool HTTP.
+_PROXY_REQUEST_GATE = threading.BoundedSemaphore(value=4)
+_PROXY_MIN_INTERVAL = 0.0
 _PROXY_LAST_REQUEST = [0.0]
 _PROXY_TIMING_LOCK = threading.Lock()
 
 def _wait_proxy_slot():
-    """يضمن 10 ثواني كاملة بين بداية كل طلب وبداية الطلب التالي."""
+    """النسخة القديمة لا تفرض تأخيراً اصطناعياً بين الطلبات."""
     with _PROXY_TIMING_LOCK:
         wait_for = _PROXY_MIN_INTERVAL - (time.time() - _PROXY_LAST_REQUEST[0])
         if wait_for > 0:
@@ -125,6 +125,7 @@ def _mark_proxy_failed(proxy_url=None, reason="unknown"):
     if proxy_url and notify:
         report_admin_alert("تأخر البروكسي — إعادة المحاولة مستمرة",
                            f"البوت سيبقى على نفس البروكسي ولن يستعمل اتصالاً مباشراً.\nالسبب: {reason}")
+    _rotate_proxy_session()
 
 def _mark_proxy_success():
     with _proxy_fail_lock:
