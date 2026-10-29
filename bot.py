@@ -81,6 +81,19 @@ ROTATE_COOLDOWN = 3
 _proxy_fail_count = [0]
 _proxy_fail_until = [0.0]
 _proxy_fail_lock = threading.Lock()
+# بروكسي واحد لا يتحمل طلبات متزامنة كثيرة؛ الطلبات الأخرى تنتظر دورها.
+_PROXY_REQUEST_GATE = threading.BoundedSemaphore(value=1)
+_PROXY_MIN_INTERVAL = 10.0
+_PROXY_LAST_REQUEST = [0.0]
+_PROXY_TIMING_LOCK = threading.Lock()
+
+def _wait_proxy_slot():
+    """يضمن 10 ثواني كاملة بين بداية كل طلب وبداية الطلب التالي."""
+    with _PROXY_TIMING_LOCK:
+        wait_for = _PROXY_MIN_INTERVAL - (time.time() - _PROXY_LAST_REQUEST[0])
+        if wait_for > 0:
+            time.sleep(wait_for)
+        _PROXY_LAST_REQUEST[0] = time.time()
 
 def _build_proxy_url():
     with _proxy_rotate_lock:
@@ -237,7 +250,9 @@ def proxy_check_sync(url):
     try:
         s = requests.Session(); s.verify = False
         s.proxies = {"http": url, "https": url}
-        r = s.get("https://api.ipify.org?format=json", timeout=8)
+        with _PROXY_REQUEST_GATE:
+            _wait_proxy_slot()
+            r = s.get("https://api.ipify.org?format=json", timeout=8)
         if r.status_code == 200 and r.json().get("ip"):
             return {"ok": True, "ip": r.json()["ip"]}
     except Exception as e:
@@ -253,7 +268,9 @@ async def safe_request(method, url, json=None, headers=None, timeout=8):
                 try:
                     s = requests.Session(); s.verify = False
                     s.proxies = {"http": proxy_url, "https": proxy_url}
-                    r = s.request(method, url, json=json, headers=headers, timeout=timeout)
+                    with _PROXY_REQUEST_GATE:
+                        _wait_proxy_slot()
+                        r = s.request(method, url, json=json, headers=headers, timeout=timeout)
                     try: j = r.json()
                     except: j = None
                     _mark_proxy_success()
@@ -277,7 +294,9 @@ def _oo_req(method, url, headers, content=b"", timeout=12, use_proxy=True):
         for attempt in range(1, 4):
             try:
                 s = _new_session(use_proxy=True)
-                r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
+                with _PROXY_REQUEST_GATE:
+                    _wait_proxy_slot()
+                    r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
                 head = r.text[:200].lstrip().lower()
                 if head.startswith(("<!doctype", "<html")):
                     try: r.close()
@@ -309,12 +328,14 @@ def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, t
         for attempt in range(1, 4):
             try:
                 s = _new_session(headers, use_proxy=True)
-                if method == "GET": r = s.get(url, params=params, timeout=timeout)
-                elif method == "POST":
-                    if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
-                    elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
-                    else: r = s.post(url, params=params, timeout=timeout)
-                else: r = s.request(method, url, params=params, timeout=timeout)
+                with _PROXY_REQUEST_GATE:
+                    _wait_proxy_slot()
+                    if method == "GET": r = s.get(url, params=params, timeout=timeout)
+                    elif method == "POST":
+                        if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
+                        elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
+                        else: r = s.post(url, params=params, timeout=timeout)
+                    else: r = s.request(method, url, params=params, timeout=timeout)
                 _mark_proxy_success()
                 return r
             except Exception as e:
