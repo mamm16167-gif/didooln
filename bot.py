@@ -1716,19 +1716,8 @@ def oo_dynamic_menu(services, uid=None):
     elif services.get("soccer_eligible"):
         m.add(InlineKeyboardButton("⚽️ Ooredoo Sport", callback_data="oo_soccer"))
 
-    if services.get("spin_available"):
-        m.add(InlineKeyboardButton("🎁 هديتي متاحة!", callback_data="oo_spin"))
-    else:
-        m.add(InlineKeyboardButton("🎁 هديتي", callback_data="oo_spin"))
-
     m.add(InlineKeyboardButton("⚡ عروض خاصة", callback_data="oo_special"))
     m.add(InlineKeyboardButton("🌐 إنترنت", callback_data="oo_internet"))
-
-    gift_count = services.get("gift_count", 0)
-    if gift_count > 0:
-        m.add(InlineKeyboardButton(f"🎁 لف واربح ({gift_count})", callback_data="oo_spin_gift"))
-    else:
-        m.add(InlineKeyboardButton("🎁 لف واربح", callback_data="oo_spin_gift"))
 
     m.add(InlineKeyboardButton("🎁 2Go FREE — 24H", callback_data="oo_quick_free_2gb"))
     m.add(InlineKeyboardButton("💳 5 دج — 5Go — 5H", callback_data="oo_quick_5dzd_5go"))
@@ -2521,6 +2510,16 @@ async def handle_text(message):
         user_steps[uid] = {"step": "await_phone", "last_activity": now}
         await send_welcome(uid); return
 
+    if str(step.get("step", "")).startswith("oo_gift"):
+        user = oo_load(uid)
+        if user and user.get("access_token"):
+            user_steps[uid] = {"step": "oo_menu", "last_activity": now}
+            await send_oo_menu(uid, user)
+        else:
+            user_steps[uid] = {"step": "await_phone", "last_activity": now}
+            await send_welcome(uid)
+        return
+
     if step.get("step") == "await_phone":
         if not is_phone:
             await bot.send_message(uid, "❌ رقم غير صحيح"); return
@@ -2689,6 +2688,11 @@ async def handle_text(message):
 async def oo_cb_handler(call):
     uid = call.from_user.id
     data = call.data
+    if (data in ("oo_spin", "oo_spin_gift") or data.startswith("oo_spin_gift_")
+            or data.startswith("oo_gift")):
+        await bot.send_message(uid, "ℹ️ خدمة اللف والهدايا غير متاحة حالياً.",
+                               reply_markup=back_btn("oo_back_menu"))
+        return
     user = oo_load(uid)
 
     if data == "oo_change":
@@ -3126,7 +3130,6 @@ async def oo_cb_handler(call):
         if r2["status"] == "ok":
             inc_stat("oo_bundles")
             await send_result(uid, f"✅ <b>تم التفعيل</b> 🎉\n📱 <code>{o_mask(ms)}</code>", "oo_back_menu")
-            asyncio.create_task(_notify_gift_available(uid, ms, at, meta))
             asyncio.create_task(_update_oo_menu_bg(uid, user, call.message.message_id))
         elif r2["status"] == "conflict":
             await bot.send_message(uid, f"⚠️ {r2.get('message','؟')}", reply_markup=back_btn("oo_back_menu"))
@@ -3161,7 +3164,6 @@ async def oo_cb_handler(call):
         if r2["status"] == "ok":
             inc_stat("oo_bundles")
             await send_result(uid, f"✅ <b>تم التفعيل</b> 🎉\n{bi['name']}", "oo_back_menu")
-            asyncio.create_task(_notify_gift_available(uid, ms, at, meta))
             asyncio.create_task(_update_oo_menu_bg(uid, user, call.message.message_id))
         elif r2["status"] == "conflict":
             await bot.send_message(uid, f"⚠️ {r2.get('message','؟')}", reply_markup=back_btn("oo_back_menu"))
@@ -3235,7 +3237,6 @@ async def oo_cb_handler(call):
                 f"✅ <b>تم التفعيل بنجاح</b> 🎉\n━━━━━━━━━━━━━━━━\n\n"
                 f"📱 <code>{o_mask(ms)}</code>\n⚡ <b>5 جيجا</b> — 5 ساعات\n"
                 f"💳 <b>5 دج</b>\n\n{PAGE_FOLLOW_TEXT}", "oo_back_menu")
-            asyncio.create_task(_notify_gift_available(uid, ms, at, meta))
             asyncio.create_task(_update_oo_menu_bg(uid, user, call.message.message_id))
             return
         if r.get("status") == "no_balance":
@@ -3329,7 +3330,6 @@ async def oo_cb_handler(call):
                 f"✅ <b>تم التفعيل بنجاح</b> 🎉\n━━━━━━━━━━━━━━━━\n\n"
                 f"📱 <code>{o_mask(ms)}</code>\n⚡ <b>1 جيجا</b> — 24 ساعة\n"
                 f"💳 <b>20 دج</b>\n\n{PAGE_FOLLOW_TEXT}", "oo_back_menu")
-            asyncio.create_task(_notify_gift_available(uid, ms, at, meta))
             asyncio.create_task(_update_oo_menu_bg(uid, user, call.message.message_id))
             return
         if r.get("status") == "no_balance":
