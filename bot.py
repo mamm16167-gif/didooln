@@ -788,16 +788,23 @@ def ooredoo_send_otp_sync(msisdn, _network_retry=0):
             return {"device": device, "otp_sent": False, "status": 429, "reason": "rate_limit"}
         if c4 == 0:
             reason = str(j4)[:500]
-            if _network_retry < 1:
-                logging.warning(f"[OO-OTP] {msisdn} → لا توجد استجابة، إعادة محاولة واحدة عبر البروكسي")
+            if _network_retry < 2:
+                logging.warning(f"[OO-OTP] {msisdn} → لا توجد استجابة، إعادة محاولة صامتة {_network_retry + 2}/3")
                 _rotate_proxy_session(force=True)
+                time.sleep(1.5)
                 return ooredoo_send_otp_sync(msisdn, _network_retry + 1)
-            report_admin_alert("فشل إرسال رمز Ooredoo", f"لا توجد استجابة بعد محاولتين عبر البروكسي.\n{reason}")
+            report_admin_alert("فشل إرسال رمز Ooredoo", f"لا توجد استجابة بعد 3 محاولات عبر البروكسي.\n{reason}")
             return {"device": device, "otp_sent": False, "status": 0, "reason": "network"}
-        if c4 not in (200, 201, 202):
-            report_admin_alert("رفض إرسال رمز Ooredoo", f"الخادم رجع HTTP {c4}: {str(j4)[:500]}")
-            return {"device": device, "otp_sent": False, "status": c4, "reason": "http_error"}
-        return {"device": device, "otp_sent": True, "status": c4}
+        if c4 == 403:
+            logging.info(f"[OO-OTP] {msisdn} → 403 (تم اعتماد الإرسال حسب تدفق Ooredoo)")
+            return {"device": device, "otp_sent": True, "status": c4}
+        if c4 != 429 and _network_retry < 2:
+            logging.warning(f"[OO-OTP] {msisdn} → {c4}، إعادة محاولة صامتة {_network_retry + 2}/3")
+            _rotate_proxy_session(force=True)
+            time.sleep(1.5)
+            return ooredoo_send_otp_sync(msisdn, _network_retry + 1)
+        report_admin_alert("رفض إرسال رمز Ooredoo", f"الخادم رجع HTTP {c4}: {str(j4)[:500]}")
+        return {"device": device, "otp_sent": False, "status": c4, "reason": "http_error"}
     except Exception as e:
         logging.error(f"❌ OOREDOO OTP: {e}")
         report_admin_alert("فشل إرسال رمز Ooredoo", str(e))
