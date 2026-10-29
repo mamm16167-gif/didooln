@@ -71,10 +71,9 @@ X_VERSION_FREE = "1.5.17"
 X_SIG_FREE = "c66054ba6166fe08d1a6a702fb10b151102a6f4ef058fcf3d995ee511ff0d267"
 
 # ==================== نظام البروكسي (الافتراضي - يبقى كما هو) ====================
-DEFAULT_PROXY_URL = "http://jxhiyvg5b9-pool-all:zz4urytkhf@premium-residential.serpproxies.com:8080"
-PROXY_POOL_FILE = Path(os.environ.get("PROXY_POOL_FILE", str(Path(__file__).with_name("proxy_pool.txt"))))
-_proxy_pool = []
-_proxy_pool_index = [0]
+PROXY_USER_BASE = "5753274-c4b102d3f4-DZ_Bouira-session"
+PROXY_USER_SUFFIX = "life-5m:f9827c3767"
+PROXY_HOST = "gate-us.owlproxy.com:1000"
 _current_session = ["31298419"]
 _proxy_rotate_lock = threading.Lock()
 _last_rotate_time = [0.0]
@@ -83,22 +82,10 @@ _proxy_fail_count = [0]
 _proxy_fail_until = [0.0]
 _proxy_fail_lock = threading.Lock()
 
-def _load_proxy_pool():
-    if _proxy_pool:
-        return _proxy_pool
-    try:
-        rows = [x.strip() for x in PROXY_POOL_FILE.read_text(encoding="utf-8").splitlines() if x.strip()]
-        _proxy_pool.extend(x if x.startswith("http://") else "http://" + x for x in rows)
-    except Exception as e:
-        logging.warning(f"[PROXY-POOL] تعذر قراءة الملف: {e}")
-    if not _proxy_pool:
-        _proxy_pool.append(DEFAULT_PROXY_URL)
-    return _proxy_pool
-
 def _build_proxy_url():
-    pool = _load_proxy_pool()
     with _proxy_rotate_lock:
-        return pool[_proxy_pool_index[0] % len(pool)]
+        sess = _current_session[0]
+    return f"http://{PROXY_USER_BASE}-{sess}-{PROXY_USER_SUFFIX}@{PROXY_HOST}"
 
 def _rotate_proxy_session(force=False):
     with _proxy_rotate_lock:
@@ -106,10 +93,9 @@ def _rotate_proxy_session(force=False):
         if not force and now - _last_rotate_time[0] < ROTATE_COOLDOWN:
             return False
         _last_rotate_time[0] = now
-        pool = _load_proxy_pool()
-        _proxy_pool_index[0] = (_proxy_pool_index[0] + 1) % len(pool)
-        new_id = _proxy_pool_index[0] + 1
-    logging.warning(f"[PROXY] 🔄 Switched global pool proxy → #{new_id}/{len(pool)}")
+        _current_session[0] = ''.join(random.choices(string.digits, k=8))
+        new_id = _current_session[0]
+    logging.warning(f"[PROXY] 🔄 Rotated → session-{new_id}")
     return True
 
 def _should_use_proxy():
@@ -131,7 +117,7 @@ def _mark_proxy_failed(proxy_url=None, reason="unknown"):
         except Exception: pass
         report_admin_alert("البروكسي توقف — تم التحويل للاتصال المباشر",
                            f"تم تعطيل البروكسي مؤقتاً 15 دقيقة.\nالسبب: {reason}\nالعمل سيستمر بلا بروكسي.")
-    # لا يوجد fallback مباشر ولا تبديل تلقائي؛ التبديل يكون يدوياً من طرف الأدمن.
+    _rotate_proxy_session()
 
 def _mark_proxy_success():
     with _proxy_fail_lock:
@@ -240,7 +226,7 @@ def activate_proxy_url(url, name=None, ip=None):
     return proxy_name
 
 def _get_active_proxy():
-    """يرجع البروكسي الذي اختاره الأدمن، وإلا البروكسي الافتراضي الناجح."""
+    """يرجع البروكسي النشط الوحيد من DB، وإلا البروكسي المدمج، وإلا None."""
     if not _should_use_proxy():
         return None
     try:
@@ -248,7 +234,9 @@ def _get_active_proxy():
         if row and row[0]:
             return row[0]
     except: pass
-    return DEFAULT_PROXY_URL
+    if _should_use_proxy():
+        return _build_proxy_url()
+    return None
 
 def proxy_check_sync(url):
     """فحص بروكسي على api.ipify.org"""
@@ -277,8 +265,18 @@ async def safe_request(method, url, json=None, headers=None, timeout=8):
             except Exception as e:
                 logging.warning(f"[SAFE-REQ] proxy: {str(e)[:80]}")
                 _mark_proxy_failed(proxy_url, str(e)[:120])
-        report_admin_alert("لا يوجد بروكسي صالح", f"تم منع الطلب المباشر: {method} {url[:100]}")
-        return {'status': 0, 'json': None, 'text': 'proxy_required_unavailable'}
+        try:
+            s = requests.Session(); s.verify = False
+            r = s.request(method, url, json=json, headers=headers, timeout=timeout)
+            try: j = r.json()
+            except: j = None
+            return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
+        except requests.exceptions.Timeout:
+            report_admin_alert("خادم API لا يجيب", f"Timeout أثناء {method} {url[:100]}")
+            return {'status': 0, 'json': None, 'text': 'timeout'}
+        except Exception as e:
+            report_admin_alert("فشل الاتصال بخادم API", f"{method} {url[:100]}\n{e}")
+            return {'status': 0, 'json': None, 'text': str(e)[:200]}
     return await asyncio.to_thread(_sync)
 
 def _oo_req(method, url, headers, content=b"", timeout=12, use_proxy=True):
@@ -303,11 +301,21 @@ def _oo_req(method, url, headers, content=b"", timeout=12, use_proxy=True):
         except Exception as e:
             logging.warning(f"[OO-REQ] proxy: {method} {url[:50]}: {str(e)[:80]}")
             _mark_proxy_failed(proxy_url, str(e)[:120])
-    report_admin_alert("لا يوجد بروكسي صالح", f"تم منع طلب Ooredoo المباشر: {method} {url[:100]}")
-    return 0, {}, {"_error": "proxy_required_unavailable"}
+    try:
+        s = _new_session(use_proxy=False)
+        r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
+        try: body = r.json()
+        except: body = {"_raw": r.text[:500]}
+        try: r.close()
+        except: pass
+        return r.status_code, dict(r.headers), body
+    except Exception as e:
+        logging.error(f"[OO-REQ-ERR] {method} {url[:60]}: {str(e)[:100]}")
+        report_admin_alert("خادم Ooredoo لا يجيب", f"{method} {url[:100]}\n{e}")
+        return 0, {}, {"_error": str(e)[:100]}
 
-def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, timeout=10, use_proxy=True):
-    proxy_url = _get_active_proxy() if use_proxy else None
+def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, timeout=10):
+    proxy_url = _get_active_proxy()
     if proxy_url:
         try:
             s = _new_session(headers, use_proxy=True)
@@ -322,8 +330,19 @@ def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, t
         except Exception as e:
             logging.warning(f"[DZ-REQ] proxy: {str(e)[:80]}")
             _mark_proxy_failed(proxy_url, str(e)[:120])
-    report_admin_alert("لا يوجد بروكسي صالح", f"تم منع طلب Djezzy المباشر: {method} {url[:100]}")
-    return None
+    try:
+        s = _new_session(headers, use_proxy=False)
+        if method == "GET": r = s.get(url, params=params, timeout=timeout)
+        elif method == "POST":
+            if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
+            elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
+            else: r = s.post(url, params=params, timeout=timeout)
+        else: r = s.request(method, url, params=params, timeout=timeout)
+        return r
+    except Exception as e:
+        logging.error(f"[DZ-REQ-ERR] {method} {url[:60]}: {str(e)[:100]}")
+        report_admin_alert("خادم Djezzy لا يجيب", f"{method} {url[:100]}\n{e}")
+        return None
 
 def dz_extract_msg(j):
     if not j: return ""
@@ -415,9 +434,6 @@ def init_db():
                   status TEXT DEFAULT 'unknown',
                   last_check REAL DEFAULT 0,
                   added_date TEXT)''')
-    c.execute('''CREATE TABLE IF NOT EXISTS bot_settings
-                 (key TEXT PRIMARY KEY, value TEXT NOT NULL)''')
-    c.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('bot_enabled', '1')")
     conn.commit(); conn.close()
 
 init_db()
@@ -437,30 +453,6 @@ def db_query(q, p=(), fetch=False, fetchall=False):
         except Exception as e:
             logging.error(f"DB: {e}"); return None
     return None
-
-def bot_is_enabled():
-    row = db_query("SELECT value FROM bot_settings WHERE key='bot_enabled'", fetch=True)
-    return bool(row and str(row[0]) == "1")
-
-def set_bot_enabled(enabled):
-    db_query("INSERT OR REPLACE INTO bot_settings (key, value) VALUES ('bot_enabled', ?)",
-             ("1" if enabled else "0",))
-
-def maintenance_markup():
-    m = InlineKeyboardMarkup()
-    m.add(InlineKeyboardButton("📢 اشترك في القناة", url=CHANNEL_LINK))
-    return m
-
-async def ensure_bot_available(user_id):
-    if user_id == ADMIN_ID or bot_is_enabled():
-        return True
-    try:
-        await bot.send_message(user_id,
-            "🛠️ <b>البوت تحت الصيانة حالياً</b>\n\n⏳ انتظر قليلاً وحاول من جديد.",
-            parse_mode='HTML')
-    except Exception as e:
-        logging.debug(f"[MAINTENANCE-MSG] {e}")
-    return False
 
 def inc_stat(field):
     try: db_query(f"UPDATE stats SET {field} = COALESCE({field}, 0) + 1 WHERE id = 1")
@@ -495,7 +487,7 @@ def dj_request_otp(phone):
         h = DJ_HEADERS.copy()
         h['User-Agent'] = ua
         try:
-            r = _dz_req("POST", url, headers=h, params=params, json_body=payload, timeout=10, use_proxy=True)
+            r = _dz_req("POST", url, headers=h, params=params, json_body=payload, timeout=10)
             if r is None: continue
             logging.info(f"[DJ-OTP] {phone} UA={ua} (try {attempt}) → {r.status_code}")
             if r.status_code == 200: return True
@@ -514,7 +506,7 @@ def dj_verify_otp(phone, otp):
                'client_id': DJ_CLIENT_ID, 'client_secret': DJ_CLIENT_SECRET, 'grant_type': "mobile"}
     h = DJ_HEADERS.copy(); h['Content-Type'] = "application/x-www-form-urlencoded"
     for i in range(3):
-        r = _dz_req("POST", url, headers=h, data=payload, timeout=20, use_proxy=True)
+        r = _dz_req("POST", url, headers=h, data=payload, timeout=20)
         if r is None: time.sleep(2); continue
         logging.info(f"[DJ-VERIFY] {phone} → {r.status_code}")
         if r.status_code == 200:
@@ -758,7 +750,7 @@ def ooredoo_send_otp_sync(msisdn):
                    "x-native-integrity-token": INTEGRITY_1,
                    "x-path": "/api/auth/realms/myooredoo/protocol/openid-connect/token",
                    "x-method": "POST"})
-        _, rh3, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h3, b"{}", timeout=10, use_proxy=True)
+        _, rh3, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h3, b"{}", timeout=10)
         nonce = rh3.get("x-nonce-id") or rh3.get("X-Nonce-Id") or ""
         chronos = rh3.get("x-chronos-id") or rh3.get("X-Chronos-Id") or ""
     except: pass
@@ -771,26 +763,15 @@ def ooredoo_send_otp_sync(msisdn):
         if nonce: h4["x-nonce-id"] = nonce
         if chronos: h4["x-chronos-id"] = chronos
         body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}"
-        c4, _, j4 = _oo_req("POST", OO_AUTH, h4, body, timeout=15, use_proxy=True)
-        logging.info(f"[OO-OTP-DIRECT] {msisdn} → {c4}")
-        if c4 in (200, 201, 202):
-            body_text = json.dumps(j4, ensure_ascii=False).lower() if j4 is not None else ""
-            failure_words = ("error", "invalid", "denied", "blocked", "failed", "failure", "refused")
-            if isinstance(j4, dict) and any(word in body_text for word in failure_words):
-                report_admin_alert("Ooredoo قبل HTTP لكن رفض OTP", f"رد الخادم: {body_text[:500]}")
-                return {"device": device, "otp_sent": False, "status": c4, "reason": "server"}
-            return {"device": device, "otp_sent": True, "status": c4}
+        c4, _, _ = _oo_req("POST", OO_AUTH, h4, body, timeout=15)
+        logging.info(f"[OO-OTP] {msisdn} → {c4}")
         if c4 == 429:
             report_admin_alert("فشل إرسال رمز Ooredoo", "الخدمة رجعت 429 (تقييد مؤقت).")
             return {"device": device, "otp_sent": False, "status": 429, "reason": "rate_limit"}
-        if c4 in (401, 403):
-            report_admin_alert("رفض Ooredoo إرسال الرمز", f"الخادم رجع HTTP {c4} لطلب OTP.")
-            return {"device": device, "otp_sent": False, "status": c4, "reason": "rejected"}
         if c4 == 0:
             report_admin_alert("فشل إرسال رمز Ooredoo", "لا توجد استجابة من الخادم.")
             return {"device": device, "otp_sent": False, "status": 0, "reason": "network"}
-        report_admin_alert("فشل إرسال رمز Ooredoo", f"الخادم رجع HTTP {c4} لطلب OTP.")
-        return {"device": device, "otp_sent": False, "status": c4, "reason": "server"}
+        return {"device": device, "otp_sent": True, "status": c4}
     except Exception as e:
         logging.error(f"❌ OOREDOO OTP: {e}")
         report_admin_alert("فشل إرسال رمز Ooredoo", str(e))
@@ -808,7 +789,7 @@ def ooredoo_verify_otp_sync(msisdn, otp, device):
         h6.update({"content-type":"application/json; charset=utf-8",
                    "x-native-integrity-token":INTEGRITY_1,
                    "x-path":"/api/auth/realms/myooredoo/protocol/openid-connect/token","x-method":"POST"})
-        _, rh6, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h6, b"{}", timeout=10, use_proxy=True)
+        _, rh6, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h6, b"{}", timeout=10)
         nonce = rh6.get("x-nonce-id") or rh6.get("X-Nonce-Id") or ""
         chronos = rh6.get("x-chronos-id") or rh6.get("X-Chronos-Id") or ""
     except: pass
@@ -820,7 +801,7 @@ def ooredoo_verify_otp_sync(msisdn, otp, device):
     if nonce: h7["x-nonce-id"] = nonce
     if chronos: h7["x-chronos-id"] = chronos
     body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}&otp={otp}"
-    c7, _, j7 = _oo_req("POST", OO_AUTH, h7, body, timeout=15, use_proxy=True)
+    c7, _, j7 = _oo_req("POST", OO_AUTH, h7, body, timeout=15)
     logging.info(f"[OO-VERIFY] {msisdn} → {c7}")
     if c7 == 200 and isinstance(j7, dict) and "access_token" in j7:
         at = j7["access_token"]
@@ -841,7 +822,7 @@ def ooredoo_refresh_token_sync(msisdn, rt, device):
     h.update({"content-type":"application/x-www-form-urlencoded",
               "x-native-integrity-token":INTEGRITY_1,
               "x-path":"/api/auth/realms/myooredoo/protocol/openid-connect/token","x-method":"POST"})
-    _, rh, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h, b"{}", timeout=10, use_proxy=True)
+    _, rh, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h, b"{}", timeout=10)
     nonce = rh.get("x-nonce-id") or rh.get("X-Nonce-Id") or ""
     chronos = rh.get("x-chronos-id") or rh.get("X-Chronos-Id") or ""
     if not nonce or not chronos: return None
@@ -851,7 +832,7 @@ def ooredoo_refresh_token_sync(msisdn, rt, device):
           "x-timestamp":ts,"x-platform-info":psig,"x-force-update":"true","x-instance-id":iid_val,
           "content-type":"application/x-www-form-urlencoded"}
     body = f"client_id={OO_CLIENT}&grant_type=refresh_token&refresh_token={rt}"
-    c2, _, j2 = _oo_req("POST", OO_AUTH, h2, body, timeout=15, use_proxy=True)
+    c2, _, j2 = _oo_req("POST", OO_AUTH, h2, body, timeout=15)
     if c2 == 200 and "access_token" in j2:
         at = j2["access_token"]
         return {"access_token": at, "refresh_token": j2.get("refresh_token", rt),
@@ -1455,7 +1436,7 @@ def _proxy_proactive_rotate():
     while not _stop_threads.is_set():
         try:
             time.sleep(25 * 60)
-            logging.info("[PROXY] Sticky pool session مستمرة؛ لا يوجد تبديل دوري")
+            _rotate_proxy_session(force=True)
         except: pass
 
 # ==================== نصوص ====================
@@ -1464,9 +1445,9 @@ WELCOME_HEADER = ("مرحبا بك في موح بوت 👋\n\n"
     "1️⃣ • أدخل الرقم 📱\n2️⃣ • أكمل الخطوات ✅\n"
     "3️⃣ • إختر عرض مناسب 🛒\n4️⃣ • انتظار الرد ... 🔍")
 WELCOME_FOOTER = "للبدء أرسل رقم هاتفك 📱"
-OTP_MSG = ("✅ <b>تم قبول طلب إرسال الرمز من الخادم</b>\n\n"
-           "📩 إذا وصلتك الرسالة، أرسل الرمز المكوّن من 6 أرقام هنا 📱\n"
-           "⏱️ إذا ما وصلش خلال لحظات، استعمل إعادة الإرسال أو جرّب لاحقاً.")
+OTP_MSG = ("✅ <b>تم إرسال الرمز بنجاح</b>\n\n"
+           "📩 تفقد رسائل هاتفك، ثم أرسل الرمز المكوّن من 6 أرقام هنا 📱\n"
+           "⏱️ الرمز صالح لفترة محدودة.")
 
 SOCCER_CLUB_NAMES = {
     "MCA": "مولودية الجزائر", "MCO": "مولودية وهران", "JSS": "شبيبة الساورة",
@@ -1483,9 +1464,7 @@ async def check_subscription(user_id):
     try:
         m = await bot.get_chat_member(REQUIRED_CHANNEL, user_id)
         return m.status not in ['left', 'kicked']
-    except Exception as e:
-        logging.warning(f"[SUBSCRIPTION-CHECK] تعذر التحقق من القناة: {e}")
-        return False
+    except: return True
 
 async def typing(cid):
     try: await bot.send_chat_action(cid, 'typing')
@@ -2078,8 +2057,6 @@ async def _update_oo_menu_bg(uid, user, msg_id):
 def admin_menu_markup():
     """لوحة الأدمن الرئيسية؛ كل أزرارها محمية أيضاً داخل callback handler."""
     m = InlineKeyboardMarkup(row_width=1)
-    toggle_text = "🔴 إيقاف البوت للجميع" if bot_is_enabled() else "🟢 تشغيل البوت للجميع"
-    m.add(InlineKeyboardButton(toggle_text, callback_data="bot_toggle"))
     m.add(InlineKeyboardButton("📊 الإحصائيات", callback_data="bot_stats"))
     m.add(InlineKeyboardButton("📋 آخر السجلات", callback_data="admin_log"))
     m.add(InlineKeyboardButton("🎁 سجل 2Go FREE", callback_data="admin_log_2g"))
@@ -2125,7 +2102,6 @@ async def cmd_start(message):
     uid = message.from_user.id
     now = time.time()
     await typing(message.chat.id)
-    if not await ensure_bot_available(uid): return
     if not await check_subscription(uid):
         await bot.reply_to(message, "🔒 اشترك في القناة:", reply_markup=subscription_markup()); return
     oo_user = oo_load(uid)
@@ -2191,17 +2167,6 @@ async def cmd_admin(message):
 async def cb_handler(call):
     uid = call.from_user.id
 
-    if not await ensure_bot_available(uid):
-        return
-
-    if call.data == "bot_toggle":
-        if uid != ADMIN_ID: return
-        new_state = not bot_is_enabled()
-        set_bot_enabled(new_state)
-        state_text = "🟢 اشتغل البوت للجميع" if new_state else "🔴 توقف البوت للجميع ودخل وضع الصيانة"
-        await bot.send_message(uid, f"✅ {state_text}", reply_markup=admin_menu_markup())
-        return
-
     if call.data.startswith("resend_otp_"):
         target = call.data.replace("resend_otp_", "")
         try: await bot.delete_message(call.message.chat.id, call.message.message_id)
@@ -2214,7 +2179,6 @@ async def cb_handler(call):
             if not result.get("otp_sent"):
                 r = result.get("reason", ""); code = result.get("status", "?")
                 if r == "rate_limit": msg = "⏳ <b>محاولات كثيرة</b>\n\n🔄 انتظر 60 ثانية"
-                elif r == "rejected": msg = "❌ <b>الخادم رفض إرسال الرمز حالياً</b>\n\n💡 جرّب بعد قليل أو بدّل الشبكة"
                 elif r == "network": msg = "❌ <b>مشكل في الاتصال</b>"
                 else: msg = f"❌ <b>تعذر الإرسال</b>\n\n💡 كود: <code>{code}</code>"
                 await bot.send_message(uid, msg, parse_mode='HTML'); return
@@ -2512,7 +2476,6 @@ async def cb_handler(call):
 async def handle_text(message):
     uid = message.from_user.id
     text = message.text.strip()
-    if not await ensure_bot_available(uid): return
     if not await check_subscription(uid):
         await cmd_start(message); return
     now = time.time()
@@ -2598,7 +2561,6 @@ async def handle_text(message):
             if not result.get("otp_sent"):
                 r = result.get("reason", ""); code = result.get("status", "?")
                 if r == "rate_limit": msg = "⏳ محاولات كثيرة، انتظر 60 ثانية"
-                elif r == "rejected": msg = "❌ الخادم رفض إرسال الرمز حالياً، حاول بعد قليل"
                 elif r == "network": msg = "❌ مشكل في الاتصال"
                 else: msg = f"❌ تعذر الإرسال\n💡 كود: {code}"
                 user_steps[uid] = {"step": "await_phone", "last_activity": now}
