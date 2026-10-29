@@ -125,7 +125,6 @@ def _mark_proxy_failed(proxy_url=None, reason="unknown"):
     if proxy_url and notify:
         report_admin_alert("تأخر البروكسي — إعادة المحاولة مستمرة",
                            f"البوت سيبقى على نفس البروكسي ولن يستعمل اتصالاً مباشراً.\nالسبب: {reason}")
-    _rotate_proxy_session()
 
 def _mark_proxy_success():
     with _proxy_fail_lock:
@@ -291,33 +290,27 @@ def _oo_req(method, url, headers, content=b"", timeout=12, use_proxy=True):
     data = content if isinstance(content, bytes) else content.encode()
     proxy_url = _get_active_proxy() if use_proxy else None
     if proxy_url:
-        last_error = "unknown"
-        for attempt in range(1, 4):
-            try:
-                s = _new_session(use_proxy=True)
-                with _PROXY_REQUEST_GATE:
-                    _wait_proxy_slot()
-                    r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
-                head = r.text[:200].lstrip().lower()
-                if head.startswith(("<!doctype", "<html")):
-                    try: r.close()
-                    except: pass
-                    last_error = "استجابة HTML بدلاً من API"
-                    _mark_proxy_failed(proxy_url, last_error)
-                    if attempt < 3: time.sleep(attempt)
-                    continue
+        try:
+            s = _new_session(use_proxy=True)
+            with _PROXY_REQUEST_GATE:
+                _wait_proxy_slot()
+                r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
+            head = r.text[:200].lstrip().lower()
+            if head.startswith(("<!doctype", "<html")):
+                try: r.close()
+                except: pass
+                _mark_proxy_failed(proxy_url, "استجابة HTML بدلاً من API")
+            else:
                 try: body = r.json()
                 except: body = {"_raw": r.text[:500]}
                 _mark_proxy_success()
                 try: r.close()
                 except: pass
                 return r.status_code, dict(r.headers), body
-            except Exception as e:
-                last_error = str(e)[:120]
-                logging.warning(f"[OO-REQ] proxy attempt {attempt}/3: {method} {url[:50]}: {last_error}")
-                _mark_proxy_failed(proxy_url, last_error)
-                if attempt < 3: time.sleep(attempt)
-        report_admin_alert("بروكسي Ooredoo لا يجيب", f"تم منع الطلب بعد 3 محاولات عبر نفس البروكسي.\n{last_error}")
+        except Exception as e:
+            logging.warning(f"[OO-REQ] proxy: {method} {url[:50]}: {str(e)[:80]}")
+            _mark_proxy_failed(proxy_url, str(e)[:120])
+            report_admin_alert("بروكسي Ooredoo لا يجيب", f"{method} {url[:100]}\n{e}")
         return 0, {}, {"_error": "proxy_unavailable"}
     report_admin_alert("لا يوجد بروكسي صالح", f"تم منع طلب Ooredoo المباشر: {method} {url[:100]}")
     return 0, {}, {"_error": "proxy_required"}
@@ -391,6 +384,17 @@ def report_admin_alert(kind, details, cooldown=300):
             logging.error(f"[ADMIN-ALERT-SCHEDULE] {e}")
     return False
 
+def _asyncio_exception_guard(loop, context):
+    """يمسك أخطاء المهام غير المنتظرة ويمنعها من إسقاط البوت."""
+    try:
+        err = context.get("exception")
+        msg = context.get("message", "خطأ asyncio غير معروف")
+        details = f"{msg}\n{err or context.get('future') or context.get('task')}"
+        logging.error(f"[ASYNC-GUARD] {details}", exc_info=err if isinstance(err, BaseException) else None)
+        report_admin_alert("خطأ داخلي — البوت مستمر", str(details)[:1200])
+    except Exception:
+        logging.exception("[ASYNC-GUARD] فشل تسجيل الخطأ")
+
 # ==================== DB ====================
 def init_db():
     conn = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
@@ -441,7 +445,14 @@ def init_db():
                   added_date TEXT)''')
     conn.commit(); conn.close()
 
-init_db()
+for _db_boot_attempt in range(5):
+    try:
+        init_db()
+        break
+    except Exception as _db_boot_error:
+        logging.exception(f"[DB-BOOT] محاولة {_db_boot_attempt + 1}/5 فشلت: {_db_boot_error}")
+        if _db_boot_attempt < 4:
+            time.sleep(2)
 
 def db_query(q, p=(), fetch=False, fetchall=False):
     for attempt in range(3):
@@ -1000,6 +1011,23 @@ def oo_purchase_free_2gb(msisdn, at, meta):
     if last_c == 401: return {"status": "unauthorized", "data": last_resp}
     if last_c in (402, 409): return {"status": "not_allowed", "data": last_resp}
     return {"status": "error", "code": last_c, "data": last_resp}
+
+async def oo_purchase_free_2gb_safe(msisdn, at, meta):
+    """تشغيل تفعيل 2GB خارج Event Loop مع مهلة وحماية من أي استثناء."""
+    try:
+        # أربع صيغ API مع إعادة المحاولة قد تحتاج وقتاً، لكن لا نتركها بلا نهاية.
+        result = await asyncio.wait_for(
+            asyncio.to_thread(oo_purchase_free_2gb, msisdn, at, meta),
+            timeout=210
+        )
+        return result if isinstance(result, dict) else {"status": "error", "data": result}
+    except asyncio.TimeoutError:
+        report_admin_alert("تفعيل 2GB تأخر", f"انتهت مهلة التفعيل للرقم المخفي {notify_mask(msisdn)}")
+        return {"status": "error", "code": "timeout", "data": {"_error": "activation_timeout"}}
+    except Exception as e:
+        logging.exception(f"[OO-FREE-2GB-SAFE] {e}")
+        report_admin_alert("فشل تفعيل 2GB", str(e)[:500])
+        return {"status": "error", "code": "exception", "data": {"_error": str(e)[:200]}}
 def oo_get_available_snakes(msisdn, at, meta):
     h = _web_hdrs(msisdn, at, meta, "application/json")
     c, _, resp = _oo_req("GET", f"{OO_BFF}/gamification/power-snake?status=AVAILABLE", h, timeout=12)
@@ -3253,7 +3281,7 @@ async def oo_cb_handler(call):
     # ==================== 🎁 2Go FREE ====================
     if data == "oo_quick_free_2gb":
         await bot.send_message(uid, "⏳ <b>جاري تفعيل 2 جيجا المجاني...</b>\n\n⏱️ انتظر قليلاً", parse_mode='HTML')
-        r = await asyncio.to_thread(oo_purchase_free_2gb, ms, at, meta)
+        r = await oo_purchase_free_2gb_safe(ms, at, meta)
         status = r.get("status", "error")
         if status == "ok":
             inc_stat("oo_free_2gb")
@@ -3419,6 +3447,7 @@ async def oo_cb_handler(call):
 async def main():
     global _MAIN_LOOP
     _MAIN_LOOP = asyncio.get_running_loop()
+    _MAIN_LOOP.set_exception_handler(_asyncio_exception_guard)
     print("=" * 60)
     print("🤖 البوت الموحّد — جيزي 🔴 + أوريدو 🟠 + 2Go FREE + 🔧 بروكسي")
     print(f"👤 الأدمن: {ADMIN_ID}")
