@@ -1,3 +1,12 @@
+import sqlite3
+from datetime import datetime
+import os
+
+# نفس مسار قاعدة البيانات اللي كيستعملها البوت
+BASE_DIR = os.path.expanduser("~")
+DB_PATH = os.path.join(BASE_DIR, "unified_bot", "boykta.db")
+
+PROXIES = """
 http://b4lb5bruybze:bevlnhzv418hn6p@209.50.182.166:3129
 http://b4lb5bruybze:bevlnhzv418hn6p@216.26.245.70:3129
 http://b4lb5bruybze:bevlnhzv418hn6p@216.26.228.205:3129
@@ -98,3 +107,35 @@ http://b4lb5bruybze:bevlnhzv418hn6p@216.26.239.238:3129
 http://b4lb5bruybze:bevlnhzv418hn6p@104.207.46.66:3129
 http://b4lb5bruybze:bevlnhzv418hn6p@104.207.51.229:3129
 http://b4lb5bruybze:bevlnhzv418hn6p@104.207.32.123:3129
+""".strip().split("\n")
+
+def add_all():
+    if not os.path.exists(DB_PATH):
+        print(f"❌ قاعدة البيانات غير موجودة في: {DB_PATH}")
+        print("شغل البوت مرة واحدة باش يتصنع الملف.")
+        return
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    
+    added = 0
+    for i, url in enumerate(PROXIES, 1):
+        url = url.strip()
+        if not url: continue
+        name = f"Proxy-Auto-{i}"
+        try:
+            # كنديرو active=1 و status=ok باش يخدمو ديريكت
+            c.execute("INSERT OR IGNORE INTO proxies (name, url, is_default, active, status, last_check, added_date) VALUES (?,?,?,?,?,?,?)",
+                      (name, url, 0, 1, "ok", 0, now))
+            added += c.rowcount
+        except Exception as e:
+            print(f"❌ خطأ في {url}: {e}")
+            
+    conn.commit()
+    conn.close()
+    print(f"✅ تم إضافة {added} بروكسي جديد بنجاح إلى قاعدة البيانات!")
+    print(f"📊 المجموع الكلي للبروكسيات: {len(PROXIES)}")
+
+if __name__ == "__main__":
+    add_all()
