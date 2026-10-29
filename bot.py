@@ -99,25 +99,19 @@ def _rotate_proxy_session(force=False):
     return True
 
 def _should_use_proxy():
-    with _proxy_fail_lock:
-        return time.time() > _proxy_fail_until[0]
+    # البروكسي إجباري؛ لا يتم التحويل إلى الاتصال المباشر أبداً.
+    return True
 
 def _mark_proxy_failed(proxy_url=None, reason="unknown"):
-    disabled = False
+    notify = False
     with _proxy_fail_lock:
         _proxy_fail_count[0] += 1
         if _proxy_fail_count[0] >= 3:
-            _proxy_fail_until[0] = time.time() + 900
             _proxy_fail_count[0] = 0
-            disabled = True
-    if proxy_url and disabled:
-        try:
-            db_query("UPDATE proxies SET active=0, status='fail', last_check=? WHERE url=?",
-                     (time.time(), proxy_url))
-        except Exception: pass
-        report_admin_alert("البروكسي توقف — تم التحويل للاتصال المباشر",
-                           f"تم تعطيل البروكسي مؤقتاً 15 دقيقة.\nالسبب: {reason}\nالعمل سيستمر بلا بروكسي.")
-    _rotate_proxy_session()
+            notify = True
+    if proxy_url and notify:
+        report_admin_alert("تأخر البروكسي — إعادة المحاولة مستمرة",
+                           f"البوت سيبقى على نفس البروكسي ولن يستعمل اتصالاً مباشراً.\nالسبب: {reason}")
 
 def _mark_proxy_success():
     with _proxy_fail_lock:
@@ -254,95 +248,84 @@ async def safe_request(method, url, json=None, headers=None, timeout=8):
     def _sync():
         proxy_url = _get_active_proxy()
         if proxy_url:
-            try:
-                s = requests.Session(); s.verify = False
-                s.proxies = {"http": proxy_url, "https": proxy_url}
-                r = s.request(method, url, json=json, headers=headers, timeout=timeout)
-                try: j = r.json()
-                except: j = None
-                _mark_proxy_success()
-                return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
-            except Exception as e:
-                logging.warning(f"[SAFE-REQ] proxy: {str(e)[:80]}")
-                _mark_proxy_failed(proxy_url, str(e)[:120])
-        try:
-            s = requests.Session(); s.verify = False
-            r = s.request(method, url, json=json, headers=headers, timeout=timeout)
-            try: j = r.json()
-            except: j = None
-            return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
-        except requests.exceptions.Timeout:
-            report_admin_alert("خادم API لا يجيب", f"Timeout أثناء {method} {url[:100]}")
-            return {'status': 0, 'json': None, 'text': 'timeout'}
-        except Exception as e:
-            report_admin_alert("فشل الاتصال بخادم API", f"{method} {url[:100]}\n{e}")
-            return {'status': 0, 'json': None, 'text': str(e)[:200]}
+            last_error = "unknown"
+            for attempt in range(1, 4):
+                try:
+                    s = requests.Session(); s.verify = False
+                    s.proxies = {"http": proxy_url, "https": proxy_url}
+                    r = s.request(method, url, json=json, headers=headers, timeout=timeout)
+                    try: j = r.json()
+                    except: j = None
+                    _mark_proxy_success()
+                    return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
+                except Exception as e:
+                    last_error = str(e)[:120]
+                    logging.warning(f"[SAFE-REQ] proxy attempt {attempt}/3: {last_error}")
+                    _mark_proxy_failed(proxy_url, last_error)
+                    if attempt < 3: time.sleep(attempt)
+            report_admin_alert("البروكسي لا يجيب", f"تم منع الطلب بعد 3 محاولات عبر نفس البروكسي.\n{last_error}")
+            return {'status': 0, 'json': None, 'text': 'proxy_unavailable'}
+        report_admin_alert("لا يوجد بروكسي صالح", f"تم منع الطلب المباشر: {method} {url[:100]}")
+        return {'status': 0, 'json': None, 'text': 'proxy_required'}
     return await asyncio.to_thread(_sync)
 
 def _oo_req(method, url, headers, content=b"", timeout=12, use_proxy=True):
     data = content if isinstance(content, bytes) else content.encode()
     proxy_url = _get_active_proxy() if use_proxy else None
     if proxy_url:
-        try:
-            s = _new_session(use_proxy=True)
-            r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
-            head = r.text[:200].lstrip().lower()
-            if head.startswith(("<!doctype", "<html")):
-                try: r.close()
-                except: pass
-                _mark_proxy_failed(proxy_url, "استجابة HTML بدلاً من API")
-            else:
+        last_error = "unknown"
+        for attempt in range(1, 4):
+            try:
+                s = _new_session(use_proxy=True)
+                r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
+                head = r.text[:200].lstrip().lower()
+                if head.startswith(("<!doctype", "<html")):
+                    try: r.close()
+                    except: pass
+                    last_error = "استجابة HTML بدلاً من API"
+                    _mark_proxy_failed(proxy_url, last_error)
+                    if attempt < 3: time.sleep(attempt)
+                    continue
                 try: body = r.json()
                 except: body = {"_raw": r.text[:500]}
                 _mark_proxy_success()
                 try: r.close()
                 except: pass
                 return r.status_code, dict(r.headers), body
-        except Exception as e:
-            logging.warning(f"[OO-REQ] proxy: {method} {url[:50]}: {str(e)[:80]}")
-            _mark_proxy_failed(proxy_url, str(e)[:120])
-    try:
-        s = _new_session(use_proxy=False)
-        r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
-        try: body = r.json()
-        except: body = {"_raw": r.text[:500]}
-        try: r.close()
-        except: pass
-        return r.status_code, dict(r.headers), body
-    except Exception as e:
-        logging.error(f"[OO-REQ-ERR] {method} {url[:60]}: {str(e)[:100]}")
-        report_admin_alert("خادم Ooredoo لا يجيب", f"{method} {url[:100]}\n{e}")
-        return 0, {}, {"_error": str(e)[:100]}
+            except Exception as e:
+                last_error = str(e)[:120]
+                logging.warning(f"[OO-REQ] proxy attempt {attempt}/3: {method} {url[:50]}: {last_error}")
+                _mark_proxy_failed(proxy_url, last_error)
+                if attempt < 3: time.sleep(attempt)
+        report_admin_alert("بروكسي Ooredoo لا يجيب", f"تم منع الطلب بعد 3 محاولات عبر نفس البروكسي.\n{last_error}")
+        return 0, {}, {"_error": "proxy_unavailable"}
+    report_admin_alert("لا يوجد بروكسي صالح", f"تم منع طلب Ooredoo المباشر: {method} {url[:100]}")
+    return 0, {}, {"_error": "proxy_required"}
 
 def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, timeout=10):
     proxy_url = _get_active_proxy()
     if proxy_url:
-        try:
-            s = _new_session(headers, use_proxy=True)
-            if method == "GET": r = s.get(url, params=params, timeout=timeout)
-            elif method == "POST":
-                if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
-                elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
-                else: r = s.post(url, params=params, timeout=timeout)
-            else: r = s.request(method, url, params=params, timeout=timeout)
-            _mark_proxy_success()
-            return r
-        except Exception as e:
-            logging.warning(f"[DZ-REQ] proxy: {str(e)[:80]}")
-            _mark_proxy_failed(proxy_url, str(e)[:120])
-    try:
-        s = _new_session(headers, use_proxy=False)
-        if method == "GET": r = s.get(url, params=params, timeout=timeout)
-        elif method == "POST":
-            if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
-            elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
-            else: r = s.post(url, params=params, timeout=timeout)
-        else: r = s.request(method, url, params=params, timeout=timeout)
-        return r
-    except Exception as e:
-        logging.error(f"[DZ-REQ-ERR] {method} {url[:60]}: {str(e)[:100]}")
-        report_admin_alert("خادم Djezzy لا يجيب", f"{method} {url[:100]}\n{e}")
+        last_error = "unknown"
+        for attempt in range(1, 4):
+            try:
+                s = _new_session(headers, use_proxy=True)
+                if method == "GET": r = s.get(url, params=params, timeout=timeout)
+                elif method == "POST":
+                    if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
+                    elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
+                    else: r = s.post(url, params=params, timeout=timeout)
+                else: r = s.request(method, url, params=params, timeout=timeout)
+                _mark_proxy_success()
+                return r
+            except Exception as e:
+                last_error = str(e)[:120]
+                logging.warning(f"[DZ-REQ] proxy attempt {attempt}/3: {last_error}")
+                _mark_proxy_failed(proxy_url, last_error)
+                if attempt < 3: time.sleep(attempt)
+        report_admin_alert("بروكسي Djezzy لا يجيب", f"تم منع الطلب بعد 3 محاولات عبر نفس البروكسي.\n{last_error}")
         return None
+    report_admin_alert("لا يوجد بروكسي صالح", f"تم منع طلب Djezzy المباشر: {method} {url[:100]}")
+    return None
 
 def dz_extract_msg(j):
     if not j: return ""
@@ -1436,7 +1419,7 @@ def _proxy_proactive_rotate():
     while not _stop_threads.is_set():
         try:
             time.sleep(25 * 60)
-            _rotate_proxy_session(force=True)
+            logging.info("[PROXY] البروكسي ثابت؛ لا يوجد تدوير دوري")
         except: pass
 
 # ==================== نصوص ====================
