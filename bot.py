@@ -213,8 +213,20 @@ def _new_session(headers=None, use_proxy=True):
     return s
 
 # ==================== 🆕 إدارة البروكسي من DB ====================
+def activate_proxy_url(url, name=None, ip=None):
+    """تفعيل بروكسي واحد فقط؛ أي بروكسي سابق يصبح غير نشط."""
+    now = time.time()
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    proxy_name = name or f"Proxy-{random.randint(1000,9999)}"
+    db_query("UPDATE proxies SET active=0, is_default=0 WHERE active=1 OR is_default=1")
+    db_query("INSERT OR IGNORE INTO proxies (name, url, is_default, active, status, last_check, added_date) VALUES (?,?,?,?,?,?,?)",
+             (proxy_name, url, 1, 1, "ok", now, stamp))
+    db_query("UPDATE proxies SET name=?, is_default=1, active=1, status='ok', last_check=? WHERE url=?",
+             (proxy_name, now, url))
+    return proxy_name
+
 def _get_active_proxy():
-    """يرجع البروكسي النشط من DB، وإلا البروكسي الافتراضي، وإلا None"""
+    """يرجع البروكسي النشط الوحيد من DB، وإلا البروكسي المدمج، وإلا None."""
     if not _should_use_proxy():
         return None
     try:
@@ -2483,10 +2495,8 @@ async def handle_text(message):
         except: pass
         
         if check["ok"]:
-            name = f"Proxy-{random.randint(1000,9999)}"
-            db_query("INSERT OR IGNORE INTO proxies (name, url, is_default, active, status, last_check, added_date) VALUES (?,?,?,?,?,?,?)",
-                     (name, text, 0, 1, "ok", time.time(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-            await bot.send_message(uid, f"✅ <b>تمت الإضافة بنجاح!</b>\n\n🌐 IP: <code>{check['ip']}</code>\n🏷️ الاسم: <b>{name}</b>\n📊 الحالة: 🟢 نشط", reply_markup=admin_proxy_menu_markup(), parse_mode='HTML')
+            name = activate_proxy_url(text)
+            await bot.send_message(uid, f"✅ <b>تم استبدال البروكسي بنجاح!</b>\n\n🌐 IP: <code>{check['ip']}</code>\n🏷️ الاسم: <b>{name}</b>\n📊 الحالة: 🟢 نشط\n\n🔁 البروكسي القديم تعطل، والبوت يستعمل هذا البروكسي الآن.", reply_markup=admin_proxy_menu_markup(), parse_mode='HTML')
         else:
             db_query("INSERT OR IGNORE INTO proxies (name, url, is_default, active, status, last_check, added_date) VALUES (?,?,?,?,?,?,?)",
                      ("Proxy-Failed", text, 0, 0, "fail", time.time(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
