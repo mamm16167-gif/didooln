@@ -102,12 +102,21 @@ def _should_use_proxy():
     with _proxy_fail_lock:
         return time.time() > _proxy_fail_until[0]
 
-def _mark_proxy_failed():
+def _mark_proxy_failed(proxy_url=None, reason="unknown"):
+    disabled = False
     with _proxy_fail_lock:
         _proxy_fail_count[0] += 1
         if _proxy_fail_count[0] >= 3:
-            _proxy_fail_until[0] = time.time() + 30
+            _proxy_fail_until[0] = time.time() + 900
             _proxy_fail_count[0] = 0
+            disabled = True
+    if proxy_url and disabled:
+        try:
+            db_query("UPDATE proxies SET active=0, status='fail', last_check=? WHERE url=?",
+                     (time.time(), proxy_url))
+        except Exception: pass
+        report_admin_alert("البروكسي توقف — تم التحويل للاتصال المباشر",
+                           f"تم تعطيل البروكسي مؤقتاً 15 دقيقة.\nالسبب: {reason}\nالعمل سيستمر بلا بروكسي.")
     _rotate_proxy_session()
 
 def _mark_proxy_success():
@@ -206,6 +215,8 @@ def _new_session(headers=None, use_proxy=True):
 # ==================== 🆕 إدارة البروكسي من DB ====================
 def _get_active_proxy():
     """يرجع البروكسي النشط من DB، وإلا البروكسي الافتراضي، وإلا None"""
+    if not _should_use_proxy():
+        return None
     try:
         row = db_query("SELECT url FROM proxies WHERE active=1 ORDER BY is_default DESC, id ASC LIMIT 1", fetch=True)
         if row and row[0]:
@@ -229,21 +240,19 @@ def proxy_check_sync(url):
 
 async def safe_request(method, url, json=None, headers=None, timeout=8):
     def _sync():
-        if _should_use_proxy() or db_query("SELECT COUNT(*) FROM proxies WHERE active=1", fetch=True)[0][0] > 0:
-            for proxy_attempt in range(1):
-                try:
-                    s = requests.Session(); s.verify = False
-                    proxy_url = _get_active_proxy()
-                    if proxy_url:
-                        s.proxies = {"http": proxy_url, "https": proxy_url}
-                    r = s.request(method, url, json=json, headers=headers, timeout=timeout)
-                    try: j = r.json()
-                    except: j = None
-                    _mark_proxy_success()
-                    return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
-                except Exception as e:
-                    logging.warning(f"[SAFE-REQ] proxy: {str(e)[:80]}")
-                    _rotate_proxy_session()
+        proxy_url = _get_active_proxy()
+        if proxy_url:
+            try:
+                s = requests.Session(); s.verify = False
+                s.proxies = {"http": proxy_url, "https": proxy_url}
+                r = s.request(method, url, json=json, headers=headers, timeout=timeout)
+                try: j = r.json()
+                except: j = None
+                _mark_proxy_success()
+                return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
+            except Exception as e:
+                logging.warning(f"[SAFE-REQ] proxy: {str(e)[:80]}")
+                _mark_proxy_failed(proxy_url, str(e)[:120])
         try:
             s = requests.Session(); s.verify = False
             r = s.request(method, url, json=json, headers=headers, timeout=timeout)
@@ -251,33 +260,35 @@ async def safe_request(method, url, json=None, headers=None, timeout=8):
             except: j = None
             return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
         except requests.exceptions.Timeout:
+            report_admin_alert("خادم API لا يجيب", f"Timeout أثناء {method} {url[:100]}")
             return {'status': 0, 'json': None, 'text': 'timeout'}
         except Exception as e:
+            report_admin_alert("فشل الاتصال بخادم API", f"{method} {url[:100]}\n{e}")
             return {'status': 0, 'json': None, 'text': str(e)[:200]}
     return await asyncio.to_thread(_sync)
 
 def _oo_req(method, url, headers, content=b"", timeout=12, use_proxy=True):
     data = content if isinstance(content, bytes) else content.encode()
-    if use_proxy and (_should_use_proxy() or db_query("SELECT COUNT(*) FROM proxies WHERE active=1", fetch=True)[0][0] > 0):
-        for proxy_attempt in range(1):
-            try:
-                s = _new_session(use_proxy=True)
-                r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
-                head = r.text[:200].lstrip().lower()
-                if head.startswith(("<!doctype", "<html")):
-                    try: r.close()
-                    except: pass
-                    _mark_proxy_failed()
-                    continue
+    proxy_url = _get_active_proxy() if use_proxy else None
+    if proxy_url:
+        try:
+            s = _new_session(use_proxy=True)
+            r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
+            head = r.text[:200].lstrip().lower()
+            if head.startswith(("<!doctype", "<html")):
+                try: r.close()
+                except: pass
+                _mark_proxy_failed(proxy_url, "استجابة HTML بدلاً من API")
+            else:
                 try: body = r.json()
                 except: body = {"_raw": r.text[:500]}
                 _mark_proxy_success()
                 try: r.close()
                 except: pass
                 return r.status_code, dict(r.headers), body
-            except Exception as e:
-                logging.warning(f"[OO-REQ] proxy: {method} {url[:50]}: {str(e)[:80]}")
-                _rotate_proxy_session()
+        except Exception as e:
+            logging.warning(f"[OO-REQ] proxy: {method} {url[:50]}: {str(e)[:80]}")
+            _mark_proxy_failed(proxy_url, str(e)[:120])
     try:
         s = _new_session(use_proxy=False)
         r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
@@ -288,24 +299,25 @@ def _oo_req(method, url, headers, content=b"", timeout=12, use_proxy=True):
         return r.status_code, dict(r.headers), body
     except Exception as e:
         logging.error(f"[OO-REQ-ERR] {method} {url[:60]}: {str(e)[:100]}")
+        report_admin_alert("خادم Ooredoo لا يجيب", f"{method} {url[:100]}\n{e}")
         return 0, {}, {"_error": str(e)[:100]}
 
 def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, timeout=10):
-    if _should_use_proxy() or db_query("SELECT COUNT(*) FROM proxies WHERE active=1", fetch=True)[0][0] > 0:
-        for proxy_attempt in range(1):
-            try:
-                s = _new_session(headers, use_proxy=True)
-                if method == "GET": r = s.get(url, params=params, timeout=timeout)
-                elif method == "POST":
-                    if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
-                    elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
-                    else: r = s.post(url, params=params, timeout=timeout)
-                else: r = s.request(method, url, params=params, timeout=timeout)
-                _mark_proxy_success()
-                return r
-            except Exception as e:
-                logging.warning(f"[DZ-REQ] proxy: {str(e)[:80]}")
-                _rotate_proxy_session()
+    proxy_url = _get_active_proxy()
+    if proxy_url:
+        try:
+            s = _new_session(headers, use_proxy=True)
+            if method == "GET": r = s.get(url, params=params, timeout=timeout)
+            elif method == "POST":
+                if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
+                elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
+                else: r = s.post(url, params=params, timeout=timeout)
+            else: r = s.request(method, url, params=params, timeout=timeout)
+            _mark_proxy_success()
+            return r
+        except Exception as e:
+            logging.warning(f"[DZ-REQ] proxy: {str(e)[:80]}")
+            _mark_proxy_failed(proxy_url, str(e)[:120])
     try:
         s = _new_session(headers, use_proxy=False)
         if method == "GET": r = s.get(url, params=params, timeout=timeout)
@@ -317,6 +329,7 @@ def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, t
         return r
     except Exception as e:
         logging.error(f"[DZ-REQ-ERR] {method} {url[:60]}: {str(e)[:100]}")
+        report_admin_alert("خادم Djezzy لا يجيب", f"{method} {url[:100]}\n{e}")
         return None
 
 def dz_extract_msg(j):
@@ -329,6 +342,37 @@ def dz_extract_msg(j):
 
 bot = AsyncTeleBot(TOKEN)
 user_steps = {}
+_MAIN_LOOP = None
+_ADMIN_ALERT_LOCK = threading.Lock()
+_ADMIN_ALERT_LAST = {}
+
+async def _send_admin_alert_async(title, details):
+    try:
+        text = (f"🚨 <b>{_html.escape(str(title))}</b>\n"
+                f"━━━━━━━━━━━━━━━━\n"
+                f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"<pre>{_html.escape(str(details)[:2500])}</pre>")
+        await bot.send_message(ADMIN_ID, text, parse_mode='HTML')
+    except Exception as e:
+        logging.error(f"[ADMIN-ALERT-SEND] {e}")
+
+def report_admin_alert(kind, details, cooldown=300):
+    """تنبيه الأدمن فقط؛ يعمل من asyncio ومن الخيوط بدون تعطيل البوت."""
+    now = time.time()
+    with _ADMIN_ALERT_LOCK:
+        last = _ADMIN_ALERT_LAST.get(kind, 0)
+        if now - last < cooldown:
+            return False
+        _ADMIN_ALERT_LAST[kind] = now
+    logging.error(f"[ADMIN-ALERT] {kind}: {details}")
+    loop = _MAIN_LOOP
+    if loop and loop.is_running():
+        try:
+            asyncio.run_coroutine_threadsafe(_send_admin_alert_async(kind, details), loop)
+            return True
+        except Exception as e:
+            logging.error(f"[ADMIN-ALERT-SCHEDULE] {e}")
+    return False
 
 # ==================== DB ====================
 def init_db():
@@ -439,6 +483,7 @@ def dj_request_otp(phone):
         except requests.exceptions.Timeout: pass
         except Exception as e: logging.error(f"DJ OTP ({ua}): {e}")
         if attempt < len(user_agents): time.sleep(1)
+    report_admin_alert("فشل إرسال رمز Djezzy", "تمت كل محاولات إرسال الرمز بدون نجاح.")
     return False
 
 def dj_verify_otp(phone, otp):
@@ -708,11 +753,16 @@ def ooredoo_send_otp_sync(msisdn):
         body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}"
         c4, _, _ = _oo_req("POST", OO_AUTH, h4, body, timeout=15)
         logging.info(f"[OO-OTP] {msisdn} → {c4}")
-        if c4 == 429: return {"device": device, "otp_sent": False, "status": 429, "reason": "rate_limit"}
-        if c4 == 0: return {"device": device, "otp_sent": False, "status": 0, "reason": "network"}
+        if c4 == 429:
+            report_admin_alert("فشل إرسال رمز Ooredoo", "الخدمة رجعت 429 (تقييد مؤقت).")
+            return {"device": device, "otp_sent": False, "status": 429, "reason": "rate_limit"}
+        if c4 == 0:
+            report_admin_alert("فشل إرسال رمز Ooredoo", "لا توجد استجابة من الخادم.")
+            return {"device": device, "otp_sent": False, "status": 0, "reason": "network"}
         return {"device": device, "otp_sent": True, "status": c4}
     except Exception as e:
         logging.error(f"❌ OOREDOO OTP: {e}")
+        report_admin_alert("فشل إرسال رمز Ooredoo", str(e))
         return {"device": device, "otp_sent": False, "status": -1, "reason": "exception"}
 
 def ooredoo_verify_otp_sync(msisdn, otp, device):
@@ -749,6 +799,8 @@ def ooredoo_verify_otp_sync(msisdn, otp, device):
                 "tok_instance_id": _exdid(at) or iid_val, "tok_plat_sig": _mps(at),
                 "tok_timestamp": ts, "issued_at": int(time.time())}
     if c7 in (400, 401, 403): return "wrong_otp"
+    if c7 == 0:
+        report_admin_alert("فشل التحقق من رمز Ooredoo", "الخادم لم يرد أثناء التحقق.")
     return None
 
 def ooredoo_refresh_token_sync(msisdn, rt, device):
@@ -1316,6 +1368,7 @@ def _start_resilient_worker(name, target):
                 target()
             except Exception:
                 logging.exception(f"[WORKER-CRASH] {name} توقف؛ إعادة المحاولة بعد 5 ثوانٍ")
+                report_admin_alert("خيط خلفي توقف", f"اسم الخيط: {name}\nسيتم تشغيله من جديد تلقائياً.")
             if not _stop_threads.is_set():
                 _stop_threads.wait(5)
     thread = threading.Thread(target=runner, name=name, daemon=True)
@@ -3349,6 +3402,8 @@ async def oo_cb_handler(call):
 
 # ==================== Main ====================
 async def main():
+    global _MAIN_LOOP
+    _MAIN_LOOP = asyncio.get_running_loop()
     print("=" * 60)
     print("🤖 البوت الموحّد — جيزي 🔴 + أوريدو 🟠 + 2Go FREE + 🔧 بروكسي")
     print(f"👤 الأدمن: {ADMIN_ID}")
@@ -3371,6 +3426,7 @@ async def main():
             raise
         except Exception as e:
             logging.exception(f"[POLLING-CRASH] {e} — إعادة الاتصال بعد 8 ثوانٍ")
+            report_admin_alert("اتصال Telegram توقف", f"Polling error: {e}\nسيتم إعادة الاتصال تلقائياً بعد 8 ثوانٍ.")
             print(f"⚠️ Polling error: {e}; reconnecting in 8s", flush=True)
         if not _stop_threads.is_set():
             await asyncio.sleep(8)
