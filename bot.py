@@ -3446,11 +3446,25 @@ async def main():
         if not _stop_threads.is_set():
             await asyncio.sleep(8)
 
+def run_forever():
+    """مشرف العملية: يعاود تشغيل الحلقة إذا وقع crash غير متوقع."""
+    global _stop_threads, _MAIN_LOOP
+    while True:
+        try:
+            asyncio.run(main())
+            logging.warning("[SUPERVISOR] انتهت الحلقة؛ إعادة التشغيل بعد 5 ثوانٍ")
+        except (KeyboardInterrupt, SystemExit):
+            _stop_threads.set()
+            print("\n⚠️ إيقاف...")
+            save_steps()
+            return
+        except Exception as e:
+            logging.exception(f"[SUPERVISOR-CRASH] {e}")
+            report_admin_alert("عملية البوت توقفت", f"سيتم إعادة التشغيل تلقائياً بعد 10 ثوانٍ.\n{e}")
+            _stop_threads.set()
+            _MAIN_LOOP = None
+            _stop_threads = threading.Event()
+        time.sleep(10)
+
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        _stop_threads.set()
-        print("\n⚠️ إيقاف..."); save_steps()
-    except Exception as e:
-        print(f"❌ {e}"); save_steps()
+    run_forever()
