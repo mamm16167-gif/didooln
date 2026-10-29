@@ -131,7 +131,7 @@ def _mark_proxy_failed(proxy_url=None, reason="unknown"):
         except Exception: pass
         report_admin_alert("البروكسي توقف — تم التحويل للاتصال المباشر",
                            f"تم تعطيل البروكسي مؤقتاً 15 دقيقة.\nالسبب: {reason}\nالعمل سيستمر بلا بروكسي.")
-    _rotate_proxy_session()
+    # لا يوجد fallback مباشر ولا تبديل تلقائي؛ التبديل يكون يدوياً من طرف الأدمن.
 
 def _mark_proxy_success():
     with _proxy_fail_lock:
@@ -240,20 +240,15 @@ def activate_proxy_url(url, name=None, ip=None):
     return proxy_name
 
 def _get_active_proxy():
-    """يرجع البروكسي الحالي من Pool العام؛ نفس البروكسي يستمر حتى يفشل."""
+    """يرجع البروكسي الذي اختاره الأدمن، وإلا البروكسي الافتراضي الناجح."""
     if not _should_use_proxy():
         return None
-    pool_proxy = _build_proxy_url()
-    if pool_proxy:
-        return pool_proxy
     try:
         row = db_query("SELECT url FROM proxies WHERE active=1 ORDER BY is_default DESC, id ASC LIMIT 1", fetch=True)
         if row and row[0]:
             return row[0]
     except: pass
-    if _should_use_proxy():
-        return _build_proxy_url()
-    return None
+    return DEFAULT_PROXY_URL
 
 def proxy_check_sync(url):
     """فحص بروكسي على api.ipify.org"""
@@ -282,18 +277,8 @@ async def safe_request(method, url, json=None, headers=None, timeout=8):
             except Exception as e:
                 logging.warning(f"[SAFE-REQ] proxy: {str(e)[:80]}")
                 _mark_proxy_failed(proxy_url, str(e)[:120])
-        try:
-            s = requests.Session(); s.verify = False
-            r = s.request(method, url, json=json, headers=headers, timeout=timeout)
-            try: j = r.json()
-            except: j = None
-            return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
-        except requests.exceptions.Timeout:
-            report_admin_alert("خادم API لا يجيب", f"Timeout أثناء {method} {url[:100]}")
-            return {'status': 0, 'json': None, 'text': 'timeout'}
-        except Exception as e:
-            report_admin_alert("فشل الاتصال بخادم API", f"{method} {url[:100]}\n{e}")
-            return {'status': 0, 'json': None, 'text': str(e)[:200]}
+        report_admin_alert("لا يوجد بروكسي صالح", f"تم منع الطلب المباشر: {method} {url[:100]}")
+        return {'status': 0, 'json': None, 'text': 'proxy_required_unavailable'}
     return await asyncio.to_thread(_sync)
 
 def _oo_req(method, url, headers, content=b"", timeout=12, use_proxy=True):
@@ -318,18 +303,8 @@ def _oo_req(method, url, headers, content=b"", timeout=12, use_proxy=True):
         except Exception as e:
             logging.warning(f"[OO-REQ] proxy: {method} {url[:50]}: {str(e)[:80]}")
             _mark_proxy_failed(proxy_url, str(e)[:120])
-    try:
-        s = _new_session(use_proxy=False)
-        r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
-        try: body = r.json()
-        except: body = {"_raw": r.text[:500]}
-        try: r.close()
-        except: pass
-        return r.status_code, dict(r.headers), body
-    except Exception as e:
-        logging.error(f"[OO-REQ-ERR] {method} {url[:60]}: {str(e)[:100]}")
-        report_admin_alert("خادم Ooredoo لا يجيب", f"{method} {url[:100]}\n{e}")
-        return 0, {}, {"_error": str(e)[:100]}
+    report_admin_alert("لا يوجد بروكسي صالح", f"تم منع طلب Ooredoo المباشر: {method} {url[:100]}")
+    return 0, {}, {"_error": "proxy_required_unavailable"}
 
 def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, timeout=10, use_proxy=True):
     proxy_url = _get_active_proxy() if use_proxy else None
@@ -347,19 +322,8 @@ def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, t
         except Exception as e:
             logging.warning(f"[DZ-REQ] proxy: {str(e)[:80]}")
             _mark_proxy_failed(proxy_url, str(e)[:120])
-    try:
-        s = _new_session(headers, use_proxy=False)
-        if method == "GET": r = s.get(url, params=params, timeout=timeout)
-        elif method == "POST":
-            if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
-            elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
-            else: r = s.post(url, params=params, timeout=timeout)
-        else: r = s.request(method, url, params=params, timeout=timeout)
-        return r
-    except Exception as e:
-        logging.error(f"[DZ-REQ-ERR] {method} {url[:60]}: {str(e)[:100]}")
-        report_admin_alert("خادم Djezzy لا يجيب", f"{method} {url[:100]}\n{e}")
-        return None
+    report_admin_alert("لا يوجد بروكسي صالح", f"تم منع طلب Djezzy المباشر: {method} {url[:100]}")
+    return None
 
 def dz_extract_msg(j):
     if not j: return ""
@@ -451,6 +415,9 @@ def init_db():
                   status TEXT DEFAULT 'unknown',
                   last_check REAL DEFAULT 0,
                   added_date TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS bot_settings
+                 (key TEXT PRIMARY KEY, value TEXT NOT NULL)''')
+    c.execute("INSERT OR IGNORE INTO bot_settings (key, value) VALUES ('bot_enabled', '1')")
     conn.commit(); conn.close()
 
 init_db()
@@ -470,6 +437,30 @@ def db_query(q, p=(), fetch=False, fetchall=False):
         except Exception as e:
             logging.error(f"DB: {e}"); return None
     return None
+
+def bot_is_enabled():
+    row = db_query("SELECT value FROM bot_settings WHERE key='bot_enabled'", fetch=True)
+    return bool(row and str(row[0]) == "1")
+
+def set_bot_enabled(enabled):
+    db_query("INSERT OR REPLACE INTO bot_settings (key, value) VALUES ('bot_enabled', ?)",
+             ("1" if enabled else "0",))
+
+def maintenance_markup():
+    m = InlineKeyboardMarkup()
+    m.add(InlineKeyboardButton("📢 اشترك في القناة", url=CHANNEL_LINK))
+    return m
+
+async def ensure_bot_available(user_id):
+    if user_id == ADMIN_ID or bot_is_enabled():
+        return True
+    try:
+        await bot.send_message(user_id,
+            "🛠️ <b>البوت تحت الصيانة حالياً</b>\n\n⏳ انتظر قليلاً وحاول من جديد.",
+            parse_mode='HTML')
+    except Exception as e:
+        logging.debug(f"[MAINTENANCE-MSG] {e}")
+    return False
 
 def inc_stat(field):
     try: db_query(f"UPDATE stats SET {field} = COALESCE({field}, 0) + 1 WHERE id = 1")
@@ -1492,7 +1483,9 @@ async def check_subscription(user_id):
     try:
         m = await bot.get_chat_member(REQUIRED_CHANNEL, user_id)
         return m.status not in ['left', 'kicked']
-    except: return True
+    except Exception as e:
+        logging.warning(f"[SUBSCRIPTION-CHECK] تعذر التحقق من القناة: {e}")
+        return False
 
 async def typing(cid):
     try: await bot.send_chat_action(cid, 'typing')
@@ -2085,6 +2078,8 @@ async def _update_oo_menu_bg(uid, user, msg_id):
 def admin_menu_markup():
     """لوحة الأدمن الرئيسية؛ كل أزرارها محمية أيضاً داخل callback handler."""
     m = InlineKeyboardMarkup(row_width=1)
+    toggle_text = "🔴 إيقاف البوت للجميع" if bot_is_enabled() else "🟢 تشغيل البوت للجميع"
+    m.add(InlineKeyboardButton(toggle_text, callback_data="bot_toggle"))
     m.add(InlineKeyboardButton("📊 الإحصائيات", callback_data="bot_stats"))
     m.add(InlineKeyboardButton("📋 آخر السجلات", callback_data="admin_log"))
     m.add(InlineKeyboardButton("🎁 سجل 2Go FREE", callback_data="admin_log_2g"))
@@ -2130,6 +2125,7 @@ async def cmd_start(message):
     uid = message.from_user.id
     now = time.time()
     await typing(message.chat.id)
+    if not await ensure_bot_available(uid): return
     if not await check_subscription(uid):
         await bot.reply_to(message, "🔒 اشترك في القناة:", reply_markup=subscription_markup()); return
     oo_user = oo_load(uid)
@@ -2194,6 +2190,17 @@ async def cmd_admin(message):
 @bot.callback_query_handler(func=lambda call: True)
 async def cb_handler(call):
     uid = call.from_user.id
+
+    if not await ensure_bot_available(uid):
+        return
+
+    if call.data == "bot_toggle":
+        if uid != ADMIN_ID: return
+        new_state = not bot_is_enabled()
+        set_bot_enabled(new_state)
+        state_text = "🟢 اشتغل البوت للجميع" if new_state else "🔴 توقف البوت للجميع ودخل وضع الصيانة"
+        await bot.send_message(uid, f"✅ {state_text}", reply_markup=admin_menu_markup())
+        return
 
     if call.data.startswith("resend_otp_"):
         target = call.data.replace("resend_otp_", "")
@@ -2505,6 +2512,7 @@ async def cb_handler(call):
 async def handle_text(message):
     uid = message.from_user.id
     text = message.text.strip()
+    if not await ensure_bot_available(uid): return
     if not await check_subscription(uid):
         await cmd_start(message); return
     now = time.time()
