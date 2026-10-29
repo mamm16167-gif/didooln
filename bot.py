@@ -1367,7 +1367,8 @@ WELCOME_HEADER = ("مرحبا بك في موح بوت 👋\n\n"
     "3️⃣ • إختر عرض مناسب 🛒\n4️⃣ • انتظار الرد ... 🔍")
 WELCOME_FOOTER = "للبدء أرسل رقم هاتفك 📱"
 OTP_MSG = ("✅ <b>تم إرسال الرمز بنجاح</b>\n\n"
-           "يرجى نسخ أو كتابة الرمز المكون من 6 أرقام الذي تلقيته في رسالة على هاتفك 📱")
+           "📩 تفقد رسائل هاتفك، ثم أرسل الرمز المكوّن من 6 أرقام هنا 📱\n"
+           "⏱️ الرمز صالح لفترة محدودة.")
 
 SOCCER_CLUB_NAMES = {
     "MCA": "مولودية الجزائر", "MCO": "مولودية وهران", "JSS": "شبيبة الساورة",
@@ -1408,10 +1409,34 @@ async def send_result(uid, text, back_cb="main_menu"):
         if "Forbidden" in str(e): logging.warning(f"[USER-BLOCKED] {uid}")
         else: logging.error(f"[SEND-RESULT] {uid}: {e}")
 
-async def notify_group_success(offer_name, network):
+def notify_mask(phone):
+    """إخفاء الرقم قبل إرساله إلى مجموعة الإشعارات."""
+    if not phone: return "غير متوفر"
+    value = str(phone)
+    if value.startswith("213"):
+        value = "0" + value[3:]
+    if len(value) >= 7:
+        return value[:4] + "****" + value[-2:]
+    return "****"
+
+async def notify_group_success(offer_name, network, uid=None, phone=None):
     if not NOTIFY_GROUP: return
     try:
+        display_name = "مستخدم"
+        if uid:
+            try:
+                chat = await bot.get_chat(uid)
+                parts = [getattr(chat, "first_name", ""), getattr(chat, "last_name", "")]
+                display_name = " ".join(p for p in parts if p).strip()
+                if not display_name and getattr(chat, "username", ""):
+                    display_name = "@" + chat.username
+            except: pass
+        display_name = _html.escape(display_name or "مستخدم")
+        offer_name = _html.escape(str(offer_name))
+        network = _html.escape(str(network))
         text = (f"✅ <b>تفعيل ناجح</b>\n━━━━━━━━━━━━━━━━\n"
+                f"👤 <b>الزبون:</b> {display_name}\n"
+                f"📱 <b>الرقم:</b> <code>{notify_mask(phone)}</code>\n"
                 f"🌐 <b>الشبكة:</b> {network}\n"
                 f"🎁 <b>العرض:</b> {offer_name}\n"
                 f"⏱️ <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}")
@@ -1786,7 +1811,7 @@ async def dz_process(uid, phone, action):
         if res == "SUCCESS":
             db_query("UPDATE numbers SET last_activation_2gb=? WHERE phone=?", (time.time(), phone))
             inc_stat("total_2gb")
-            await notify_group_success("2GB أسبوعي", "Djezzy 🔴")
+            await notify_group_success("2GB أسبوعي", "Djezzy 🔴", uid, phone)
             await send_result(uid, f"✅ <b>تم التفعيل بنجاح</b> 🎉\n\n📱 <code>{dz_mask(phone)}</code>\n🎁 2 جيجا", "main_menu")
         elif res == "EXPIRED":
             db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (phone,))
@@ -1816,7 +1841,7 @@ async def dz_process_3gb(uid, phone):
     if res == "SUCCESS":
         db_query("UPDATE numbers SET last_activation_3gb=? WHERE phone=?", (time.time(), phone))
         inc_stat("total_3gb")
-        await notify_group_success("3GB", "Djezzy 🔴")
+        await notify_group_success("3GB", "Djezzy 🔴", uid, phone)
         await send_result(uid, f"✅ <b>تم التفعيل بنجاح</b> 🎉\n\n📱 <code>{dz_mask(phone)}</code>\n🎁 3 جيجا", "main_menu")
     elif res == "EXPIRED":
         db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (phone,))
@@ -1950,6 +1975,18 @@ async def _update_oo_menu_bg(uid, user, msg_id):
         logging.debug(f"[OO-MENU-UPDATE] {e}")
 
 # ==================== 🆕 لوحة إدارة البروكسي ====================
+def admin_menu_markup():
+    """لوحة الأدمن الرئيسية؛ كل أزرارها محمية أيضاً داخل callback handler."""
+    m = InlineKeyboardMarkup(row_width=1)
+    m.add(InlineKeyboardButton("📊 الإحصائيات", callback_data="bot_stats"))
+    m.add(InlineKeyboardButton("📋 آخر السجلات", callback_data="admin_log"))
+    m.add(InlineKeyboardButton("🎁 سجل 2Go FREE", callback_data="admin_log_2g"))
+    m.add(InlineKeyboardButton("⚠️ الأخطاء والتحذيرات", callback_data="admin_log_err"))
+    m.add(InlineKeyboardButton("🗑️ مسح السجل", callback_data="admin_log_clear"))
+    m.add(InlineKeyboardButton("🔧 إدارة البروكسي", callback_data="admin_proxy_menu"))
+    m.add(InlineKeyboardButton("↩️ رجوع للقائمة", callback_data="main_menu"))
+    return m
+
 def admin_proxy_menu_markup():
     m = InlineKeyboardMarkup(row_width=1)
     m.add(InlineKeyboardButton("➕ إضافة بروكسي", callback_data="admin_proxy_add"))
@@ -2083,7 +2120,7 @@ async def cb_handler(call):
                 await bot.send_message(uid, "❌ <b>تعذر إرسال الرمز</b>", reply_markup=mm, parse_mode='HTML')
         return
 
-    if call.data != "check_sub" and not await check_subscription(uid):
+    if uid != ADMIN_ID and call.data != "check_sub" and not await check_subscription(uid):
         try: await bot.delete_message(call.message.chat.id, call.message.message_id)
         except: pass
         await bot.send_message(uid, "🔒 اشترك:", reply_markup=subscription_markup()); return
@@ -2234,7 +2271,7 @@ async def cb_handler(call):
         if result.get("success"):
             db_query("UPDATE numbers SET last_activation_offers=? WHERE phone=?", (time.time(), ph))
             inc_stat("total_offers")
-            await notify_group_success("70دج — 4GB", "Djezzy 🔴")
+            await notify_group_success("70دج — 4GB", "Djezzy 🔴", uid, ph)
             await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=main_menu_markup(uid))
         else:
             await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=back_btn("main_menu"))
@@ -2264,7 +2301,7 @@ async def cb_handler(call):
         if result.get("success"):
             db_query("UPDATE numbers SET last_activation_offers=? WHERE phone=?", (time.time(), ph))
             inc_stat("total_offers")
-            await notify_group_success("90دج — 5GB", "Djezzy 🔴")
+            await notify_group_success("90دج — 5GB", "Djezzy 🔴", uid, ph)
             await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=main_menu_markup(uid))
         else:
             await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=back_btn("main_menu"))
@@ -2340,7 +2377,7 @@ async def cb_handler(call):
         if result.get("success"):
             db_query("UPDATE numbers SET last_activation_offers=? WHERE phone=?", (time.time(), ph))
             inc_stat("total_offers")
-            await notify_group_success(o.get('name', 'العرض'), "Djezzy 🔴")
+            await notify_group_success(o.get('name', 'العرض'), "Djezzy 🔴", uid, ph)
             await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=main_menu_markup(uid))
         else:
             await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=back_btn("main_menu"))
@@ -2438,7 +2475,12 @@ async def handle_text(message):
             if existing and existing.get("msisdn") == msisdn and existing.get("access_token"):
                 user_steps[uid] = {"step": "oo_menu", "last_activity": now}
                 await send_oo_menu(uid, existing); return
+            try: loading_msg = await bot.send_message(uid, "⏳ <b>جاري إرسال رمز التحقق...</b>", parse_mode='HTML')
+            except: loading_msg = None
             result = await asyncio.to_thread(ooredoo_send_otp_sync, msisdn)
+            if loading_msg:
+                try: await bot.delete_message(uid, loading_msg.message_id)
+                except: pass
             if not result.get("otp_sent"):
                 r = result.get("reason", ""); code = result.get("status", "?")
                 if r == "rate_limit": msg = "⏳ محاولات كثيرة، انتظر 60 ثانية"
@@ -2497,7 +2539,10 @@ async def handle_text(message):
         m = re.search(r"\b(\d{6})\b", text)
         if not m: await bot.send_message(uid, "⚠️ 6 أرقام"); return
         otp = m.group(1); ms = step.get("msisdn"); device = step.get("device", {})
+        checking_msg = await bot.send_message(uid, "⏳ <b>جاري التحقق من الرمز...</b>", parse_mode='HTML')
         result = await asyncio.to_thread(ooredoo_verify_otp_sync, ms, otp, device)
+        try: await bot.delete_message(uid, checking_msg.message_id)
+        except: pass
         if result == "wrong_otp":
             await bot.send_message(uid, "❌ <b>الرمز خاطئ</b>", parse_mode='HTML'); return
         if not result:
@@ -2509,6 +2554,7 @@ async def handle_text(message):
                  (uid, message.from_user.username or message.from_user.first_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
         db_query("UPDATE users SET is_logged_in=1 WHERE user_id=?", (uid,))
         user_steps[uid] = {"step": "oo_menu", "last_activity": time.time()}
+        await bot.send_message(uid, "✅ <b>تم التحقق بنجاح والدخول إلى حسابك</b>", parse_mode='HTML')
         await send_oo_menu(uid, user); return
 
     if step.get("step") == "dz_verify_otp":
@@ -2518,7 +2564,10 @@ async def handle_text(message):
                 if "Forbidden" in str(e): logging.warning(f"[USER-BLOCKED] {uid}")
             return
         phone = step.get("phone")
+        checking_msg = await bot.send_message(uid, "⏳ <b>جاري التحقق من الرمز...</b>", parse_mode='HTML')
         token = await asyncio.to_thread(dj_verify_otp, phone, text)
+        try: await bot.delete_message(uid, checking_msg.message_id)
+        except: pass
         if token and token != "EXPIRED":
             db_query("INSERT OR REPLACE INTO numbers (phone,user_id,token,added_date) VALUES (?,?,?,?)",
                      (phone, uid, token, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
@@ -2529,6 +2578,7 @@ async def handle_text(message):
             inc_stat("dz_logins")
             user_steps[uid] = {"step": "dz_menu", "last_activity": time.time()}
             try:
+                await bot.send_message(uid, "✅ <b>تم التحقق بنجاح والدخول إلى حسابك</b>", parse_mode='HTML')
                 await send_dz_menu(uid, phone)
             except Exception as e:
                 if "Forbidden" in str(e):
@@ -2887,7 +2937,7 @@ async def oo_cb_handler(call):
         r = await asyncio.to_thread(oo_activate_snapchat, ms, at, meta)
         if r == "ok":
             inc_stat("oo_snap")
-            await notify_group_success("Snapchat", "Ooredoo 🟠")
+            await notify_group_success("Snapchat", "Ooredoo 🟠", uid, ms)
             await send_result(uid, f"✅ <b>تم تفعيل سناب!</b>\n📱 <code>{o_mask(ms)}</code>", "oo_back_menu")
         elif r == "already_active":
             await bot.send_message(uid, "⚠️ <b>مفعّلة مسبقاً</b>", reply_markup=back_btn("oo_back_menu"))
@@ -3098,7 +3148,7 @@ async def oo_cb_handler(call):
             await bot.send_message(uid, "🔐 <b>انتهت الجلسة</b>", reply_markup=mm, parse_mode='HTML'); return
         if r.get("status") == "ok":
             inc_stat("oo_5dzd_5go")
-            await notify_group_success("5دج — 5Go", "Ooredoo 🟠")
+            await notify_group_success("5دج — 5Go", "Ooredoo 🟠", uid, ms)
             await send_result(uid,
                 f"✅ <b>تم التفعيل بنجاح</b> 🎉\n━━━━━━━━━━━━━━━━\n\n"
                 f"📱 <code>{o_mask(ms)}</code>\n⚡ <b>5 جيجا</b> — 5 ساعات\n"
@@ -3124,7 +3174,7 @@ async def oo_cb_handler(call):
         status = r.get("status", "error")
         if status == "ok":
             inc_stat("oo_free_2gb")
-            await notify_group_success("2Go مجاني — 24H", "Ooredoo 🟠")
+            await notify_group_success("2Go مجاني — 24H", "Ooredoo 🟠", uid, ms)
             await send_result(uid,
                 f"🎉 <b>مبروك عليك!</b>\n━━━━━━━━━━━━━━━━\n\n"
                 f"✅ <b>تم تفعيل 2 جيجا</b>\n\n"
@@ -3192,7 +3242,7 @@ async def oo_cb_handler(call):
                 reply_markup=mm, parse_mode='HTML'); return
         if r.get("status") == "ok":
             inc_stat("oo_20dzd_1go")
-            await notify_group_success("20دج — 1Go", "Ooredoo 🟠")
+            await notify_group_success("20دج — 1Go", "Ooredoo 🟠", uid, ms)
             await send_result(uid,
                 f"✅ <b>تم التفعيل بنجاح</b> 🎉\n━━━━━━━━━━━━━━━━\n\n"
                 f"📱 <code>{o_mask(ms)}</code>\n⚡ <b>1 جيجا</b> — 24 ساعة\n"
