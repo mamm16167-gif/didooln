@@ -914,10 +914,10 @@ async def _cb_inner(call):
         await bot.send_message(uid, "🗑️ <b>حذف الرقم المحفوظ</b>\n\n📱 <b>الأرقام:</b>\n" + "\n".join(saved), reply_markup=kb, parse_mode='HTML'); return
 
     if call.data == "delete_my_number_ok":
-        db_query("DELETE FROM numbers WHERE user_id=?", (uid,))
-        oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid); _release_proxy(uid)
-                user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
-        await bot.send_message(uid, "✅ <b>تم الحذف</b>\n\n💡 أرسل رقمك من جديد", reply_markup=back_btn("main_menu"), parse_mode='HTML'); return
+    db_query("DELETE FROM numbers WHERE user_id=?", (uid,))
+    oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid); _release_proxy(uid)
+    user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
+    await bot.send_message(uid, "✅ <b>تم الحذف</b>\n\n💡 أرسل رقمك من جديد", reply_markup=back_btn("main_menu"), parse_mode='HTML'); return
 
     if call.data == "change_phone":
         oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid); _release_proxy(uid)
