@@ -2004,23 +2004,13 @@ def _install_global_handlers():
         logging.error(f"[GLOBAL-HANDLERS] {e}")
 
 async def _run_polling_once():
+    """تشغيل infinity_polling — فقط skip_pending و timeout (متوافق مع كل الإصدارات)."""
     try:
         await bot.remove_webhook()
     except Exception as e:
         logging.warning(f"[POLL] remove_webhook: {e}")
     logging.warning("[POLL] ▶️ infinity_polling starting...")
-    # ⚠️ لا نمرّر non_stop — infinity_polling تمرّرها داخلياً
-    try:
-        await bot.infinity_polling(
-            skip_pending=True,
-            timeout=30,
-            long_polling_timeout=25,
-            restart_on_change=False,
-            logger_level=logging.WARNING,
-        )
-    except TypeError as e:
-        logging.warning(f"[POLL] TypeError with kwargs ({e}) — retrying minimal")
-        await bot.infinity_polling(skip_pending=True, timeout=30)
+    await bot.infinity_polling(skip_pending=True, timeout=30)
     logging.warning("[POLL] ⚠️ infinity_polling returned unexpectedly")
 
 async def _polling_supervisor():
