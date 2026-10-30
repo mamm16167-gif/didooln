@@ -10,32 +10,6 @@ from pathlib import Path
 from collections import deque
 import html as _html
 
-# ==================== 🎨 الأزرار الملوّنة ====================
-def _auto_button_style(text):
-    t = str(text)
-    if "إلغاء" in t or t.strip().startswith("❌") or "🚫" in t or "حذف" in t:
-        return "danger"
-    if "تأكيد" in t or "اشترِ" in t or "دفع" in t or "🛒" in t:
-        return "success"
-    return "primary"
-
-_orig_ikb_init = InlineKeyboardButton.__init__
-_orig_ikb_to_dict = InlineKeyboardButton.to_dict
-
-def _new_ikb_init(self, *args, style=None, **kwargs):
-    _orig_ikb_init(self, *args, **kwargs)
-    self.style = style
-
-def _new_ikb_to_dict(self):
-    d = _orig_ikb_to_dict(self)
-    if "style" not in d:
-        explicit = getattr(self, "style", None)
-        d["style"] = explicit if explicit else _auto_button_style(self.text)
-    return d
-
-InlineKeyboardButton.__init__ = _new_ikb_init
-InlineKeyboardButton.to_dict = _new_ikb_to_dict
-
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.getLogger("urllib3").setLevel(logging.CRITICAL)
 
@@ -81,14 +55,14 @@ ROTATE_COOLDOWN = 3
 _proxy_fail_count = [0]
 _proxy_fail_until = [0.0]
 _proxy_fail_lock = threading.Lock()
-# نفس توازن النسخة القديمة: أربع طلبات متزامنة مع Pool HTTP.
-_PROXY_REQUEST_GATE = threading.BoundedSemaphore(value=4)
-_PROXY_MIN_INTERVAL = 0.0
+# طابور موحد: طلب واحد فقط في كل لحظة وفاصل دقيقة لحماية البروكسي والخدمات.
+_PROXY_REQUEST_GATE = threading.BoundedSemaphore(value=1)
+_PROXY_MIN_INTERVAL = 60.0
 _PROXY_LAST_REQUEST = [0.0]
 _PROXY_TIMING_LOCK = threading.Lock()
 
 def _wait_proxy_slot():
-    """النسخة القديمة لا تفرض تأخيراً اصطناعياً بين الطلبات."""
+    """يفرض فاصلاً ثابتاً بين طلبات البروكسي حتى لا تتزاحم الطلبات."""
     with _PROXY_TIMING_LOCK:
         wait_for = _PROXY_MIN_INTERVAL - (time.time() - _PROXY_LAST_REQUEST[0])
         if wait_for > 0:
@@ -140,6 +114,7 @@ RATE_PLAN_NAMES = {
 
 PHONE_STICKER = "CAACAgIAAxkBAAIMG2mxR6mD0xL5WplUQ0sTGQ8aECNdAAJ3BQACP5XMCmWM0yxKQdlOOgQ"
 INACTIVITY_SECONDS = 600
+OTP_WAIT_SECONDS = 600
 
 INTEGRITY_1 = ("JWBTpxXcH7KY9EXYeIRp8NjQMx2dt3vF8ejjoARazyoFzOw6Cu8+wkeV+zSVHSTeI6a12SG/FU+Q/9uBrcN71Rl"
     "YO4CulD2x375NKwJRAInar8DVUilHBKUfjEsoHd6EwfLCfdYzLNXJu9POfEf6tqKn3PUe0pY6qZxWLhyVAFHw8Qwb"
@@ -355,6 +330,7 @@ user_steps = {}
 _MAIN_LOOP = None
 _ADMIN_ALERT_LOCK = threading.Lock()
 _ADMIN_ALERT_LAST = {}
+ADMIN_ALERTS_ENABLED = False
 
 async def _send_admin_alert_async(title, details):
     try:
@@ -367,7 +343,10 @@ async def _send_admin_alert_async(title, details):
         logging.error(f"[ADMIN-ALERT-SEND] {e}")
 
 def report_admin_alert(kind, details, cooldown=300):
-    """تنبيه الأدمن فقط؛ يعمل من asyncio ومن الخيوط بدون تعطيل البوت."""
+    """يسجل الخطأ محلياً فقط؛ لا يرسل رسائل تلقائية للأدمن حتى لا يزعج المستخدمين."""
+    if not ADMIN_ALERTS_ENABLED:
+        logging.error(f"[LOCAL-ALERT] {kind}: {details}")
+        return False
     now = time.time()
     with _ADMIN_ALERT_LOCK:
         last = _ADMIN_ALERT_LAST.get(kind, 0)
@@ -665,11 +644,11 @@ def dj_activate_1gb(token, phone):
     return "FAILED"
 
 def dj_activate_2gb(token, phone):
-    h = DJ_HEADERS.copy(); h['Authorization'] = f"Bearer {token}"; h['User-Agent'] = "MobileApp/3.0.7"
+    h = DJ_HEADERS.copy(); h['Authorization'] = f'Bearer {token}'; h['User-Agent'] = "MobileApp/3.0.9"
     endpoints = [
-        (f"{DJ_BASE}/api/v1/services/shake/{phone}", "GIFTWALKWIN2GO"),
-        (f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}", "GIFTWALKWIN2GO"),
-        (f"{DJ_BASE}/api/v1/subscribers/activate-product/{phone}", "GIFTWALKWIN2GO"),
+        (f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}", "GIFTWALKWIN6GDAY"),
+        (f"{DJ_BASE}/api/v1/services/shake/{phone}", "GIFTWALKWIN6GDAY"),
+        (f"{DJ_BASE}/api/v1/subscribers/activate-product/{phone}", "GIFTWALKWIN6GDAY"),
     ]
     last = 0
     for url, code in endpoints:
@@ -677,9 +656,18 @@ def dj_activate_2gb(token, phone):
         if r is None: continue
         last = r.status_code
         if r.status_code == 401: return "EXPIRED"
-        if r.status_code in (200, 201):
-            if "already" in r.text.lower(): return "LIMIT"
-            return "SUCCESS"
+        if r.status_code == 201:
+            try:
+                payload = r.json() if r.content else {}
+            except Exception:
+                payload = {}
+            msg = str(payload.get("message", "")).strip().lower()
+            api_status = payload.get("status")
+            if api_status == 200 and msg == "product successfully activated":
+                return "SUCCESS"
+            if "already" in (r.text or "").lower() or "déjà" in (r.text or "").lower():
+                return "LIMIT"
+            continue
         if r.status_code == 402: return "NO_BALANCE"
         if r.status_code == 429: return "RATE_LIMIT"
         time.sleep(0.3)
@@ -1689,9 +1677,8 @@ GIFT_INFO_TEXT = (
 # ==================== Menus ====================
 def main_menu_markup(user_id=None):
     m = InlineKeyboardMarkup(row_width=1)
-    m.add(InlineKeyboardButton("🎁 تفعيل 2 جيجا — 7 أيام", callback_data="activate_2gb"))
+    m.add(InlineKeyboardButton("🎁 تفعيل 6 جيجا — 7 أيام", callback_data="activate_2gb"))
     m.add(InlineKeyboardButton("🔄 تغيير الرقم", callback_data="change_phone"))
-    m.add(InlineKeyboardButton("🗑️ حذف الرقم المحفوظ", callback_data="delete_my_number"))
     if user_id and user_id == ADMIN_ID:
         m.add(InlineKeyboardButton("📊 إحصائيات", callback_data="bot_stats"))
         m.add(InlineKeyboardButton("📋 سجل البوت", callback_data="admin_menu"))
@@ -1745,7 +1732,6 @@ def oo_dynamic_menu(services, uid=None):
     m = InlineKeyboardMarkup(row_width=1)
     m.add(InlineKeyboardButton("🎁 تفعيل 2 جيجا — 24 ساعة", callback_data="oo_quick_free_2gb"))
     m.add(InlineKeyboardButton("🔄 تغيير الرقم", callback_data="oo_change"))
-    m.add(InlineKeyboardButton("🗑️ حذف الرقم المحفوظ", callback_data="delete_my_number"))
 
     if uid and uid == ADMIN_ID:
         m.add(InlineKeyboardButton("📊 إحصائيات", callback_data="oo_stats"))
@@ -1906,8 +1892,8 @@ async def dz_process(uid, phone, action):
         if res == "SUCCESS":
             db_query("UPDATE numbers SET last_activation_2gb=? WHERE phone=?", (time.time(), phone))
             inc_stat("total_2gb")
-            await notify_group_success("2GB أسبوعي", "Djezzy 🔴", uid, phone)
-            await send_result(uid, f"✅ <b>تم التفعيل بنجاح</b> 🎉\n\n📱 <code>{dz_mask(phone)}</code>\n🎁 2 جيجا", "main_menu")
+            await notify_group_success("6GB أسبوعي", "Djezzy 🔴", uid, phone)
+            await send_result(uid, f"✅ <b>تم التفعيل بنجاح</b> 🎉\n\n📱 <code>{dz_mask(phone)}</code>\n🎁 6 جيجا — 7 أيام", "main_menu")
         elif res == "EXPIRED":
             db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (phone,))
             await _dz_request_new_otp(uid, phone)
@@ -2034,7 +2020,7 @@ async def send_oo_menu(uid, user):
         if "Forbidden" in str(e): logging.warning(f"[USER-BLOCKED] {uid}")
         else: logging.error(f"[OO-MENU] {uid}: {e}")
         return
-    asyncio.create_task(_update_oo_menu_bg(uid, user, msg.message_id))
+    # لا نطلق فحوصاً خلفية إضافية؛ القائمة تحتوي على العرض المطلوب فقط.
 
 async def _update_oo_menu_bg(uid, user, msg_id):
     try:
@@ -2497,6 +2483,11 @@ async def handle_text(message):
     now = time.time()
     cur_step = user_steps.get(uid, {}).get("step", "")
     last_activity = user_steps.get(uid, {}).get("last_activity", 0)
+
+    if cur_step in ("oo_await_otp", "dz_verify_otp") and last_activity and (now - last_activity) > OTP_WAIT_SECONDS:
+        user_steps[uid] = {"step": "await_phone", "last_activity": now}
+        await bot.send_message(uid, "⌛ انتهت مهلة الرمز بعد 10 دقائق.\n📱 أرسل الرقم من جديد لإرسال رمز جديد.")
+        return
     
     if cur_step == "proxy_await_url" and uid == ADMIN_ID:
         if text.lower() in ("إلغاء", "cancel"):
