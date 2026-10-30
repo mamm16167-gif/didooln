@@ -1442,7 +1442,7 @@ async def cmd_admin(message):
 # ==================== Start ====================
 @bot.message_handler(commands=['start'], chat_types=['private'])
 async def cmd_start(message):
-    _last_heartbeat[0] = time.time()   # ✅ heartbeat
+    _last_heartbeat[0] = time.time()
     uid = message.from_user.id; now = time.time()
     await typing(message.chat.id)
     if not await check_subscription(uid):
@@ -1466,7 +1466,7 @@ async def cmd_start(message):
     call.message and call.message.chat and call.message.chat.type == 'private'
 ))
 async def cb_handler(call):
-    _last_heartbeat[0] = time.time()   # ✅ heartbeat
+    _last_heartbeat[0] = time.time()
     try:
         await _cb_inner(call)
     except Exception as e:
@@ -1866,7 +1866,7 @@ async def oo_cb_handler(call):
 # ==================== TEXT HANDLER ====================
 @bot.message_handler(func=lambda m: True, content_types=['text'], chat_types=['private'])
 async def handle_text(message):
-    _last_heartbeat[0] = time.time()   # ✅ heartbeat
+    _last_heartbeat[0] = time.time()
     try:
         await _text_inner(message)
     except Exception as e:
@@ -2009,17 +2009,18 @@ async def _run_polling_once():
     except Exception as e:
         logging.warning(f"[POLL] remove_webhook: {e}")
     logging.warning("[POLL] ▶️ infinity_polling starting...")
-    poll_kwargs = dict(
-        skip_pending=True,
-        timeout=30,
-        long_polling_timeout=25,
-        restart_on_change=False,
-        logger_level=logging.WARNING,
-    )
+    # ⚠️ لا نمرّر non_stop — infinity_polling تمرّرها داخلياً
     try:
-        await bot.infinity_polling(non_stop=True, **poll_kwargs)
-    except TypeError:
-        await bot.infinity_polling(**poll_kwargs)
+        await bot.infinity_polling(
+            skip_pending=True,
+            timeout=30,
+            long_polling_timeout=25,
+            restart_on_change=False,
+            logger_level=logging.WARNING,
+        )
+    except TypeError as e:
+        logging.warning(f"[POLL] TypeError with kwargs ({e}) — retrying minimal")
+        await bot.infinity_polling(skip_pending=True, timeout=30)
     logging.warning("[POLL] ⚠️ infinity_polling returned unexpectedly")
 
 async def _polling_supervisor():
