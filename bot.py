@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""البوت الموحّد v2 — جيزي 🔴 + أوريدو 🟠 + 6G مجاناً + 2Go FREE + 📋 سجل"""
+"""البوت الموحّد v4 — جيزي (owlproxy) | أوريدو (IP Pool 100)"""
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import asyncio, sqlite3, requests, random, time, re, json, os, uuid, base64, threading, logging, urllib3, hashlib, string
+import asyncio, sqlite3, requests, random, time, re, json, os, uuid, base64, threading, logging, urllib3, hashlib, string, contextvars
 from datetime import datetime, timedelta, timezone as tz
 from pathlib import Path
-from collections import deque
+from collections import deque, Counter
 import html as _html
 
 # ==================== 🎨 الأزرار الملوّنة ====================
@@ -21,18 +21,14 @@ def _auto_button_style(text):
 
 _orig_ikb_init = InlineKeyboardButton.__init__
 _orig_ikb_to_dict = InlineKeyboardButton.to_dict
-
 def _new_ikb_init(self, *args, style=None, **kwargs):
-    _orig_ikb_init(self, *args, **kwargs)
-    self.style = style
-
+    _orig_ikb_init(self, *args, **kwargs); self.style = style
 def _new_ikb_to_dict(self):
     d = _orig_ikb_to_dict(self)
     if "style" not in d:
         explicit = getattr(self, "style", None)
         d["style"] = explicit if explicit else _auto_button_style(self.text)
     return d
-
 InlineKeyboardButton.__init__ = _new_ikb_init
 InlineKeyboardButton.to_dict = _new_ikb_to_dict
 
@@ -53,10 +49,10 @@ DJ_HEADERS = {'User-Agent': "MobileApp/3.0.0", 'Accept': "application/json",
 COOLDOWN_2GB = 604800
 COOLDOWN_3GB = 604800
 COOLDOWN_6GB_DAILY = 86400
-COOLDOWN_FREE_2GB_OO = 86400         # ⭐ 24h
+COOLDOWN_FREE_2GB_OO = 86400
 OTP_RESEND_COOLDOWN = 60
-OTP_VERIFY_MIN_WAIT = 3              # ⭐ ثواني انتظار قبل التحقق
-OTP_VERIFY_MAX_RETRY = 3             # ⭐ محاولات
+OTP_VERIFY_MIN_WAIT = 3
+OTP_VERIFY_MAX_RETRY = 3
 DZ_HEADERS = DJ_HEADERS
 DZ_BASE_URL = DJ_BASE
 PAGE_FOLLOW_TEXT = f"📢 تابع قناتنا: {CHANNEL_LINK}"
@@ -72,7 +68,207 @@ X_VERSION_FREE = "1.5.17"
 X_SIG_FREE = "c66054ba6166fe08d1a6a702fb10b151102a6f4ef058fcf3d995ee511ff0d267"
 NOTIFY_GROUP = "@ifoekdjdh"
 
-# ==================== نظام البروكسي ====================
+BASE_DIR = Path(os.path.expanduser("~")) / "unified_bot"
+SESSIONS_DIR = BASE_DIR / "sessions"
+for d in (BASE_DIR, SESSIONS_DIR):
+    d.mkdir(parents=True, exist_ok=True)
+
+logging.basicConfig(level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler(), logging.FileHandler(str(BASE_DIR / "bot.log"), encoding='utf-8')])
+
+# ==================== 🌐 IP Pool مدمج (100 بروكسي — لأوريدو فقط) ====================
+_PROXY_LIST_RAW = """
+b4lb5bruybze:bevlnhzv418hn6p@209.50.182.166:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.245.70:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.228.205:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.6.83:3129
+b4lb5bruybze:bevlnhzv418hn6p@45.3.46.237:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.39.23:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.28.231:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.59.175:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.39.4:3129
+b4lb5bruybze:bevlnhzv418hn6p@151.123.178.227:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.13.45:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.38.20:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.180.22:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.237.2:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.188.59:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.43.10:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.185.226:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.233.131:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.187.171:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.46.56:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.172.25:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.179.0:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.35.136:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.190.221:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.41.158:3129
+b4lb5bruybze:bevlnhzv418hn6p@45.3.37.165:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.246.212:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.49.197:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.235.43:3129
+b4lb5bruybze:bevlnhzv418hn6p@45.3.39.129:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.55.46:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.187.235:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.24.136:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.46.154:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.38.209:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.183.160:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.59.148:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.25.118:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.45.215:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.236.182:3129
+b4lb5bruybze:bevlnhzv418hn6p@45.3.54.232:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.47.179:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.250.201:3129
+b4lb5bruybze:bevlnhzv418hn6p@45.3.41.249:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.225.172:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.34.189:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.249.157:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.3.216:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.189.217:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.187.32:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.190.25:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.253.113:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.225.225:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.25.89:3129
+b4lb5bruybze:bevlnhzv418hn6p@45.3.53.0:3129
+b4lb5bruybze:bevlnhzv418hn6p@45.3.33.2:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.237.86:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.167.14:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.32.82:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.0.14:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.52.98:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.175.227:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.247.127:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.20.69:3129
+b4lb5bruybze:bevlnhzv418hn6p@45.3.32.177:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.55.216:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.13.243:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.229.123:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.56.78:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.63.253:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.31.190:3129
+b4lb5bruybze:bevlnhzv418hn6p@45.3.37.111:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.167.25.134:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.232.14:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.253.47:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.43.149:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.169.184:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.163.68:3129
+b4lb5bruybze:bevlnhzv418hn6p@45.3.44.126:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.26.96:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.3.66:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.244.113:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.237.137:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.36.83:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.41.18:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.226.84:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.8.159:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.181.82:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.58.104:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.167.44:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.48.191:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.3.169:3129
+b4lb5bruybze:bevlnhzv418hn6p@209.50.174.31:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.56.14:3129
+b4lb5bruybze:bevlnhzv418hn6p@217.181.91.201:3129
+b4lb5bruybze:bevlnhzv418hn6p@65.111.7.54:3129
+b4lb5bruybze:bevlnhzv418hn6p@216.26.239.238:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.46.66:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.51.229:3129
+b4lb5bruybze:bevlnhzv418hn6p@104.207.32.123:3129
+"""
+
+def _normalize_proxy(line):
+    p = line.strip()
+    if not p or p.startswith("#"): return None
+    if "://" in p: return p
+    if "@" in p: return f"http://{p}"
+    return f"http://{p}"
+
+PROXY_POOL = [x for x in (_normalize_proxy(l) for l in _PROXY_LIST_RAW.splitlines()) if x]
+logging.info(f"[PROXY-POOL] ✅ تم تحميل {len(PROXY_POOL)} بروكسي مدمج (لأوريدو فقط)")
+
+_ctx_proxy_url = contextvars.ContextVar('proxy_url', default=None)
+_ctx_uid = contextvars.ContextVar('uid', default=None)
+
+_proxy_pool_lock = threading.Lock()
+_proxy_assignments = {}
+_proxy_bad_until = {}
+_proxy_last_used = {}
+
+def _acquire_proxy(uid, force_new=False):
+    if not PROXY_POOL: return None
+    with _proxy_pool_lock:
+        old_proxy = _proxy_assignments.get(uid)
+        if old_proxy and not force_new:
+            return old_proxy
+        if old_proxy:
+            _proxy_assignments.pop(uid, None)
+            _proxy_last_used[old_proxy] = time.time()
+        now = time.time()
+        used = set(_proxy_assignments.values())
+        candidates = [p for p in PROXY_POOL
+                      if p not in used and _proxy_bad_until.get(p, 0) < now]
+        if force_new and old_proxy:
+            candidates = [p for p in candidates if p != old_proxy]
+        if candidates:
+            proxy = min(candidates, key=lambda p: _proxy_last_used.get(p, 0))
+        else:
+            not_bad = [p for p in PROXY_POOL if _proxy_bad_until.get(p, 0) < now]
+            if force_new and old_proxy and len(not_bad) > 1:
+                not_bad = [p for p in not_bad if p != old_proxy]
+            if not_bad:
+                counts = Counter(_proxy_assignments.values())
+                proxy = min(not_bad, key=lambda p: counts.get(p, 0))
+            else:
+                proxy = min(PROXY_POOL, key=lambda p: _proxy_bad_until.get(p, 0))
+        _proxy_assignments[uid] = proxy
+        _proxy_last_used[proxy] = now
+        marker = "🔄" if old_proxy and old_proxy != proxy else "👤"
+        logging.info(f"[PROXY-POOL] {marker} {uid} ← {proxy[:70]}")
+        return proxy
+
+def _release_proxy(uid):
+    with _proxy_pool_lock:
+        if uid in _proxy_assignments:
+            p = _proxy_assignments.pop(uid)
+            _proxy_last_used[p] = time.time()
+            logging.info(f"[PROXY-POOL] ♻️ {uid} حرّر IP")
+
+def _rotate_user_proxy_after_success(uid):
+    old = _proxy_assignments.get(uid)
+    _release_proxy(uid)
+    new = _acquire_proxy(uid, force_new=True)
+    if new:
+        _ctx_proxy_url.set(new)
+        short_old = old.split("@")[-1] if old and "@" in old else (old or "none")[:30]
+        short_new = new.split("@")[-1] if "@" in new else new[:30]
+        logging.info(f"[PROXY-POOL] 🔄 {uid} IP جديد بعد التفعيل: {short_old} → {short_new}")
+    return new
+
+def _mark_bad(proxy_url, uid=None, duration=120):
+    if not proxy_url: return
+    with _proxy_pool_lock:
+        _proxy_bad_until[proxy_url] = time.time() + duration
+        if uid and _proxy_assignments.get(uid) == proxy_url:
+            _proxy_assignments.pop(uid, None)
+    _ctx_proxy_url.set(None)
+    logging.warning(f"[PROXY-POOL] ❌ bad: {proxy_url[:60]} ({duration}s)")
+
+def _get_ctx_proxy(): return _ctx_proxy_url.get()
+def _get_ctx_uid(): return _ctx_uid.get()
+
+def _get_proxy_for_session():
+    p = _get_ctx_proxy()
+    if p: return p
+    u = _get_ctx_uid()
+    if u is not None: return _acquire_proxy(u)
+    return None
+
+# ==================== owlproxy (لجيزي فقط) ====================
 PROXY_USER_BASE = "5753274-c4b102d3f4-DZ_Bouira-session"
 PROXY_USER_SUFFIX = "life-5m:f9827c3767"
 PROXY_HOST = "gate-us.owlproxy.com:1000"
@@ -96,8 +292,7 @@ def _rotate_proxy_session(force=False):
             return False
         _last_rotate_time[0] = now
         _current_session[0] = ''.join(random.choices(string.digits, k=8))
-        new_id = _current_session[0]
-    logging.warning(f"[PROXY] 🔄 Rotated → session-{new_id}")
+    logging.warning(f"[OWL] 🔄 session-{_current_session[0]}")
     return True
 
 def _should_use_proxy():
@@ -146,37 +341,23 @@ INTEGRITY_2 = ("JWBTpxXcH7KR/kzaHeUUydDWODuU4i3H4fL9gCgKzyYfyN4qLJJE8keV+zSVHSTe
     "rOx8DbFr2NW8qb3hv+CIzK1zL3LDryKjqNkTxcOp4aJnmSTa73guCEmWc7pnLkLw5O8RgW7RKHrObeeQ0l9lu4H"
     "WXwlhdWRxvVMQDimhtTrGASL6sIuaxyhOkrH4HFImP70SaCoK9+euMxnzkPjg9HqPIFj+I0KSMloVxW")
 
-BASE_DIR = Path(os.path.expanduser("~")) / "unified_bot"
-SESSIONS_DIR = BASE_DIR / "sessions"
-for d in (BASE_DIR, SESSIONS_DIR):
-    d.mkdir(parents=True, exist_ok=True)
-
-logging.basicConfig(level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[logging.StreamHandler(), logging.FileHandler(str(BASE_DIR / "bot.log"), encoding='utf-8')])
-
-# ==================== 📋 Log Ring Buffer ====================
+# ==================== 📋 Log Ring ====================
 _LOG_BUFFER = deque(maxlen=500)
 _LOG_LOCK = threading.Lock()
-
 class _RingBufferHandler(logging.Handler):
     def emit(self, record):
         try:
             msg = self.format(record)
-            with _LOG_LOCK:
-                _LOG_BUFFER.append(msg)
+            with _LOG_LOCK: _LOG_BUFFER.append(msg)
         except: pass
-
 _ring_handler = _RingBufferHandler()
 _ring_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%H:%M:%S'))
 _ring_handler.setLevel(logging.INFO)
 logging.getLogger().addHandler(_ring_handler)
 
 def get_logs(n=30, filter_kw=None):
-    with _LOG_LOCK:
-        lines = list(_LOG_BUFFER)
-    if filter_kw:
-        lines = [l for l in lines if filter_kw.lower() in l.lower()]
+    with _LOG_LOCK: lines = list(_LOG_BUFFER)
+    if filter_kw: lines = [l for l in lines if filter_kw.lower() in l.lower()]
     return lines[-n:]
 
 def format_logs_for_telegram(lines, title):
@@ -185,26 +366,32 @@ def format_logs_for_telegram(lines, title):
     body_raw = "\n".join(lines) if lines else "(فارغ)"
     body = _html.escape(body_raw)
     max_body = 3800 - len(header) - len(footer)
-    if len(body) > max_body:
-        body = "..." + body[-max_body:]
+    if len(body) > max_body: body = "..." + body[-max_body:]
     return header + body + footer
 
 STEPS_FILE = BASE_DIR / "user_steps.json"
 DB_PATH = str(BASE_DIR / "boykta.db")
-_PROFILE_CACHE = {}
 
 # ==================== Sessions ====================
-def _new_session(headers=None, use_proxy=True):
+# allow_pool=True  → أوريدو (IP pool)
+# allow_owlproxy=True → جيزي (owlproxy)
+def _new_session(headers=None, use_proxy=True, allow_owlproxy=False, allow_pool=False):
     s = requests.Session()
     a = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=20, max_retries=1, pool_block=False)
     s.mount('http://', a); s.mount('https://', a)
     s.verify = False
-    if use_proxy and _should_use_proxy():
-        proxy_url = _build_proxy_url()
-        s.proxies = {"http": proxy_url, "https": proxy_url}
+    if use_proxy:
+        if allow_pool:
+            ctx_proxy = _get_proxy_for_session()
+            if ctx_proxy:
+                s.proxies = {"http": ctx_proxy, "https": ctx_proxy}
+        if not s.proxies and allow_owlproxy and _should_use_proxy():
+            proxy_url = _build_proxy_url()
+            s.proxies = {"http": proxy_url, "https": proxy_url}
     if headers: s.headers.update(headers)
     return s
 
+# ⭐ جيزي: owlproxy فقط (بلا pool)
 async def safe_request(method, url, json=None, headers=None, timeout=15):
     def _sync():
         if _should_use_proxy():
@@ -219,7 +406,7 @@ async def safe_request(method, url, json=None, headers=None, timeout=15):
                     _mark_proxy_success()
                     return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
                 except Exception as e:
-                    logging.warning(f"[SAFE-REQ] proxy #{proxy_attempt+1}: {str(e)[:80]}")
+                    logging.warning(f"[SAFE-REQ] owl #{proxy_attempt+1}: {str(e)[:80]}")
                     _rotate_proxy_session()
                     if proxy_attempt == 0: time.sleep(0.3)
         try:
@@ -234,18 +421,21 @@ async def safe_request(method, url, json=None, headers=None, timeout=15):
             return {'status': 0, 'json': None, 'text': str(e)[:200]}
     return await asyncio.to_thread(_sync)
 
+# ⭐ أوريدو: IP pool فقط (بلا owlproxy)
 def _oo_req(method, url, headers, content=b"", timeout=20, use_proxy=True):
     data = content if isinstance(content, bytes) else content.encode()
-    if use_proxy and _should_use_proxy():
+    if use_proxy:
         for proxy_attempt in range(2):
             try:
-                s = _new_session(use_proxy=True)
+                s = _new_session(use_proxy=True, allow_owlproxy=False, allow_pool=True)
+                if not s.proxies:
+                    break
                 r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
                 head = r.text[:200].lstrip().lower()
                 if head.startswith(("<!doctype", "<html")):
                     try: r.close()
                     except: pass
-                    _mark_proxy_failed()
+                    _mark_bad(_get_ctx_proxy(), uid=_get_ctx_uid(), duration=120)
                     continue
                 try: body = r.json()
                 except: body = {"_raw": r.text[:500]}
@@ -254,11 +444,11 @@ def _oo_req(method, url, headers, content=b"", timeout=20, use_proxy=True):
                 except: pass
                 return r.status_code, dict(r.headers), body
             except Exception as e:
-                logging.warning(f"[OO-REQ] proxy #{proxy_attempt+1} {method} {url[:50]}: {str(e)[:80]}")
-                _rotate_proxy_session()
+                logging.warning(f"[OO-REQ] pool #{proxy_attempt+1} {method} {url[:50]}: {str(e)[:80]}")
+                _mark_bad(_get_ctx_proxy(), uid=_get_ctx_uid(), duration=120)
                 if proxy_attempt == 0: time.sleep(0.3)
     try:
-        s = _new_session(use_proxy=False)
+        s = requests.Session(); s.verify = False
         r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
         try: body = r.json()
         except: body = {"_raw": r.text[:500]}
@@ -269,11 +459,14 @@ def _oo_req(method, url, headers, content=b"", timeout=20, use_proxy=True):
         logging.error(f"[OO-REQ-ERR] {method} {url[:60]}: {str(e)[:100]}")
         return 0, {}, {"_error": str(e)[:100]}
 
+# ⭐ جيزي: owlproxy فقط (بلا pool)
 def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, timeout=15):
     if _should_use_proxy():
         for proxy_attempt in range(2):
             try:
-                s = _new_session(headers, use_proxy=True)
+                s = _new_session(headers, use_proxy=True, allow_owlproxy=True, allow_pool=False)
+                if not s.proxies:
+                    break
                 if method == "GET": r = s.get(url, params=params, timeout=timeout)
                 elif method == "POST":
                     if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
@@ -283,7 +476,7 @@ def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, t
                 _mark_proxy_success()
                 return r
             except Exception as e:
-                logging.warning(f"[DZ-REQ] proxy #{proxy_attempt+1}: {str(e)[:80]}")
+                logging.warning(f"[DZ-REQ] owl #{proxy_attempt+1}: {str(e)[:80]}")
                 _rotate_proxy_session()
                 if proxy_attempt == 0: time.sleep(0.3)
     try:
@@ -310,7 +503,6 @@ def dz_extract_msg(j):
 bot = AsyncTeleBot(TOKEN)
 user_steps = {}
 _last_otp_sent = {}
-
 # ==================== DB ====================
 def init_db():
     conn = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
@@ -407,7 +599,6 @@ def dj_request_otp(phone):
         time.sleep(0.5)
     return False
 
-# ⭐ إصلاح: retry 3 مرات بـ 3 ثواني بين كل محاولة
 def dj_verify_otp(phone, otp):
     url = f"{DJ_BASE}/oauth2/token"
     clean = ''.join(filter(str.isdigit, otp))
@@ -417,21 +608,16 @@ def dj_verify_otp(phone, otp):
     h = DJ_HEADERS.copy(); h['Content-Type'] = "application/x-www-form-urlencoded"
     last_status = 0
     for attempt in range(OTP_VERIFY_MAX_RETRY):
-        if attempt > 0:
-            time.sleep(OTP_VERIFY_MIN_WAIT)
+        if attempt > 0: time.sleep(OTP_VERIFY_MIN_WAIT)
         r = _dz_req("POST", url, headers=h, data=payload, timeout=25)
-        if r is None:
-            continue
+        if r is None: continue
         last_status = r.status_code
         logging.info(f"[DJ-VERIFY] {phone} attempt {attempt+1} → {r.status_code}")
         if r.status_code == 200:
             try: return r.json().get('access_token')
             except: return None
-        if r.status_code == 429:
-            return None
-        # 401/400: retry (قد يكون propagation delay)
-    if last_status == 401:
-        return "EXPIRED"
+        if r.status_code == 429: return None
+    if last_status == 401: return "EXPIRED"
     return None
 
 def dj_check_balance(token, phone):
@@ -674,7 +860,6 @@ def ooredoo_send_otp_sync(msisdn):
         logging.error(f"❌ OOREDOO OTP: {e}")
         return {"device": device, "otp_sent": False, "status": -1, "reason": "exception"}
 
-# ⭐ إصلاح: retry 3 مرات
 def ooredoo_verify_otp_sync(msisdn, otp, device):
     iid_val = device.get("instance_id") or _iid()
     psig = device.get("plat_sig") or _pld(iid_val)
@@ -706,8 +891,7 @@ def ooredoo_verify_otp_sync(msisdn, otp, device):
 
     last_status = 0
     for attempt in range(OTP_VERIFY_MAX_RETRY):
-        if attempt > 0:
-            time.sleep(OTP_VERIFY_MIN_WAIT)
+        if attempt > 0: time.sleep(OTP_VERIFY_MIN_WAIT)
         try:
             c7, j7 = _one_attempt()
             last_status = c7
@@ -718,13 +902,11 @@ def ooredoo_verify_otp_sync(msisdn, otp, device):
                         "expires_in": j7.get("expires_in", 0), "tok_fingerprint": fp_otp,
                         "tok_instance_id": _exdid(at) or iid_val, "tok_plat_sig": _mps(at),
                         "tok_timestamp": _now_ms(), "issued_at": int(time.time())}
-            if c7 == 429:
-                return None
+            if c7 == 429: return None
         except Exception as e:
             logging.error(f"[OO-VERIFY] attempt {attempt+1}: {e}")
             continue
-    if last_status in (400, 401, 403):
-        return "wrong_otp"
+    if last_status in (400, 401, 403): return "wrong_otp"
     return None
 
 def ooredoo_refresh_token_sync(msisdn, rt, device):
@@ -791,7 +973,7 @@ def oo_purchase_20dzd_1go(msisdn, at, meta):
             "x-timestamp": _now_ms(), "x-instance-id": iid_val}
     def _do(method, url, h, data=b"", t=20):
         try:
-            s = _new_session(use_proxy=True)
+            s = _new_session(use_proxy=True, allow_owlproxy=False, allow_pool=True)
             d = data if isinstance(data, bytes) else (data.encode() if isinstance(data, str) else data)
             r = s.request(method, url, headers=h, data=d, timeout=t, allow_redirects=False)
             try: b = r.json()
@@ -817,18 +999,15 @@ def oo_purchase_20dzd_1go(msisdn, at, meta):
     if c == 401: return {"status": "purchase_blocked"}
     return {"status": "error", "code": c}
 
-# ⭐ إصلاح جذري: لا نعتبر 500 = "already" تلقائياً
 def oo_purchase_free_2gb(msisdn, at, meta):
     body_simple = json.dumps({"bundleCode": "BTL_24H_DATA_Free_2Go"}, separators=(",", ":"))
     body_full = json.dumps({"bundleCode": "BTL_24H_DATA_Free_2Go",
                             "validity": "day", "validityAmount": "1"}, separators=(",", ":"))
-
     endpoints = [
         ("bundlePurchase", f"{OO_BFF}/cvm/bundlePurchase"),
         ("dynamic-bundle", f"{OO_BFF}/cvm/dynamic-bundle-purchase"),
     ]
     bodies = [("simple", body_simple), ("full", body_full)]
-
     def _try(url, body, label):
         try:
             h = _web_hdrs(msisdn, at, meta, "application/json; charset=utf-8")
@@ -838,31 +1017,19 @@ def oo_purchase_free_2gb(msisdn, at, meta):
         except Exception as e:
             logging.error(f"[OO-FREE-2GB][{label}] {msisdn}: {e}")
             return 0, {"_error": str(e)[:100]}
-
     already_seen = None
-
     for round_idx in range(2):
-        if round_idx > 0:
-            time.sleep(2)
+        if round_idx > 0: time.sleep(2)
         for ep_label, url in endpoints:
             for body_label, body in bodies:
                 c, resp = _try(url, body, f"r{round_idx+1}|{ep_label}|{body_label}")
-
-                if c in (200, 201):
-                    return {"status": "ok", "data": resp}
-
-                # فقط إذا الرسالة فعلاً فيها "already" نعتبرها مفعلة
+                if c in (200, 201): return {"status": "ok", "data": resp}
                 resp_str = str(resp).lower()
                 if any(k in resp_str for k in ("already", "déjà", "purchased", "subscribed", "duplicate", "exist")):
                     already_seen = resp
                     continue
-
-                if c == 401:
-                    return {"status": "unauthorized", "data": resp}
-                if c == 429:
-                    time.sleep(3)
-                    break  # retry next round
-
+                if c == 401: return {"status": "unauthorized", "data": resp}
+                if c == 429: time.sleep(3); break
     if already_seen is not None:
         return {"status": "already", "data": already_seen}
     return {"status": "error", "data": None}
@@ -890,7 +1057,6 @@ def dz_clear_session(uid):
         if f.exists(): f.unlink()
     except: pass
 
-# ⭐ cooldown 2Go FREE — ملف منفصل لكل مستخدم
 def oo_free2gb_save(uid, msisdn):
     try:
         (SESSIONS_DIR / f"free2gb_{uid}.json").write_text(
@@ -902,8 +1068,7 @@ def oo_free2gb_get_last(uid, msisdn):
         f = SESSIONS_DIR / f"free2gb_{uid}.json"
         if not f.exists(): return 0
         d = json.loads(f.read_text())
-        if d.get("msisdn") == msisdn:
-            return d.get("last", 0)
+        if d.get("msisdn") == msisdn: return d.get("last", 0)
     except: pass
     return 0
 
@@ -988,6 +1153,24 @@ def _proxy_proactive_rotate():
             _rotate_proxy_session(force=True)
         except: pass
 
+def proxy_cleanup_worker():
+    """يحرّر IPs لأي مستخدم أوريدو خامل > 10 دقائق"""
+    while not _stop_threads.is_set():
+        try:
+            time.sleep(60)
+            now = time.time()
+            with _proxy_pool_lock:
+                to_release = []
+                for uid in list(_proxy_assignments.keys()):
+                    step_info = user_steps.get(uid, {})
+                    last = step_info.get("last_activity", 0)
+                    if not last or (now - last) > INACTIVITY_SECONDS:
+                        to_release.append(uid)
+                for uid in to_release:
+                    _proxy_assignments.pop(uid, None)
+                    logging.info(f"[PROXY-POOL] ⏰ حرّر تلقائياً {uid} (خامل)")
+        except: pass
+
 # ==================== نصوص ====================
 WELCOME_HEADER = ("مرحبا بك في موح بوت 👋\n\n"
     "بوت موح يقدم تفعيل عروض انترنت في مختلف الشبكات الجزائرية 🇩🇿\n\n"
@@ -1017,8 +1200,7 @@ async def typing(cid):
 def _otp_can_resend(uid):
     last = _last_otp_sent.get(uid, 0)
     elapsed = time.time() - last
-    if elapsed >= OTP_RESEND_COOLDOWN:
-        return True, 0
+    if elapsed >= OTP_RESEND_COOLDOWN: return True, 0
     return False, int(OTP_RESEND_COOLDOWN - elapsed)
 
 async def send_otp_message(cid, display, full, markup=None):
@@ -1068,7 +1250,6 @@ AVAILABLE_OFFERS = {
     "BTLINTSPEEDDAY2Go": {"name": "📱 70 Da - 4GB - 24H","price": "70 دج","validity": "24 ساعة","data": "4 جيجا"},
 }
 
-# ==================== Menus ====================
 def main_menu_markup(user_id=None):
     m = InlineKeyboardMarkup(row_width=1)
     m.add(InlineKeyboardButton("🎉 تفعيل 2 جيجا (أسبوعي)", callback_data="activate_2gb"))
@@ -1110,12 +1291,15 @@ def get_stats_text():
     while len(s) < 15: s = s + (0,)
     users = db_query("SELECT COUNT(*) FROM users", fetch=True)[0] or 0
     dz = db_query("SELECT COUNT(*) FROM numbers", fetch=True)[0] or 0
-    return (f"📊 <b>الإحصائيات</b>\n👥 {users} | 📱 {dz}\n\n"
-            f"🔴 جيزي:\n"
+    pool_count = len(PROXY_POOL)
+    active = len(_proxy_assignments)
+    return (f"📊 <b>الإحصائيات</b>\n👥 {users} | 📱 {dz}\n"
+            f"🌐 IP Pool (أوريدو): {active}/{pool_count} نشط\n\n"
+            f"🔴 جيزي (owlproxy):\n"
             f"  🎁 2G أسبوعي: {s[0]}\n"
             f"  🎁 6G يومي:   {s[2]}\n"
             f"  💰 العروض: {s[3]}\n\n"
-            f"🟠 أوريدو:\n  🔐: {s[4]}  👻: {s[5]}\n"
+            f"🟠 أوريدو (IP Pool):\n  🔐: {s[4]}  👻: {s[5]}\n"
             f"  ⚡ 20دج-1Go: {s[10]}\n"
             f"  🎁 2Go FREE: {s[14]}")
 
@@ -1137,6 +1321,7 @@ def admin_menu_markup():
     m = InlineKeyboardMarkup(row_width=2)
     m.add(InlineKeyboardButton("📋 آخر 30 سطر", callback_data="admin_log"))
     m.add(InlineKeyboardButton("🎁 سجل 2Go", callback_data="admin_log_2g"))
+    m.add(InlineKeyboardButton("🌐 حالة IP Pool", callback_data="admin_log_pool"))
     m.add(InlineKeyboardButton("❌ الأخطاء", callback_data="admin_log_err"))
     m.add(InlineKeyboardButton("🗑️ مسح السجل", callback_data="admin_log_clear"))
     m.add(InlineKeyboardButton("↩️ رجوع", callback_data="main_menu"))
@@ -1198,6 +1383,7 @@ async def dz_process(uid, phone, action):
         if res == "SUCCESS":
             db_query("UPDATE numbers SET last_activation_2gb=? WHERE phone=?", (time.time(), phone))
             inc_stat("total_2gb")
+            # ⚠️ جيزي: بلا rotate
             await notify_group_success("2GB أسبوعي", "Djezzy 🔴")
             await send_result(uid, f"✅ <b>تم التفعيل بنجاح</b> 🎉\n\n📱 <code>{dz_mask(phone)}</code>\n🎁 2 جيجا", "main_menu")
         elif res == "EXPIRED":
@@ -1222,6 +1408,7 @@ async def dz_process(uid, phone, action):
             db_query("UPDATE numbers SET last_activation_6gb_daily=? WHERE phone=?",
                      (time.time(), phone))
             inc_stat("total_6gb_daily")
+            # ⚠️ جيزي: بلا rotate
             await notify_group_success("6 جيجا يومي (مجاناً)", "Djezzy 🔴")
             await send_result(uid,
                 f"✅ <b>تم التفعيل بنجاح</b> 🎉\n\n"
@@ -1293,7 +1480,7 @@ async def _update_oo_menu_bg(uid, user, msg_id):
             reply_markup=oo_dynamic_menu(svc, uid), parse_mode='HTML')
     except: pass
 
-# ==================== 📋 Admin Log Commands ====================
+# ==================== Admin Log Commands ====================
 @bot.message_handler(commands=['log'], chat_types=['private'])
 async def cmd_log(message):
     if message.from_user.id != ADMIN_ID: return
@@ -1314,6 +1501,25 @@ async def cmd_log2g(message):
     if not lines:
         await bot.send_message(message.chat.id, "📭 لا توجد سجلات 2Go"); return
     await bot.send_message(message.chat.id, format_logs_for_telegram(lines, "سجل 2Go"), parse_mode='HTML')
+
+@bot.message_handler(commands=['logpool'], chat_types=['private'])
+async def cmd_logpool(message):
+    if message.from_user.id != ADMIN_ID: return
+    with _proxy_pool_lock:
+        assigned = dict(_proxy_assignments)
+        bad = dict(_proxy_bad_until)
+    now = time.time()
+    lines = [f"📊 Pool: {len(PROXY_POOL)} IP | نشط: {len(assigned)}"]
+    for uid, p in list(assigned.items())[:20]:
+        short = p.split("@")[-1] if "@" in p else p
+        lines.append(f"👤 {uid} ← {short}")
+    bad_active = [(p, int(b - now)) for p, b in bad.items() if b > now]
+    if bad_active:
+        lines.append(f"\n❌ معطوب: {len(bad_active)}")
+        for p, s in bad_active[:10]:
+            short = p.split("@")[-1] if "@" in p else p
+            lines.append(f"  {short} ({s}s)")
+    await bot.send_message(message.chat.id, format_logs_for_telegram(lines, "🌐 حالة IP Pool"), parse_mode='HTML')
 
 @bot.message_handler(commands=['logerr'], chat_types=['private'])
 async def cmd_logerr(message):
@@ -1358,15 +1564,18 @@ async def cmd_start(message):
     user_steps[uid] = {"step": "await_phone", "last_activity": now}
     await send_welcome(message.chat.id)
 
-# ==================== Callback Handler (محمي) ====================
+# ==================== Callback Handler ====================
 @bot.callback_query_handler(func=lambda call: (
     call.message and call.message.chat and call.message.chat.type == 'private'
 ))
 async def cb_handler(call):
+    uid = call.from_user.id
+    _ctx_uid.set(uid)
+    _ctx_proxy_url.set(_proxy_assignments.get(uid))
     try:
         await _cb_inner(call)
     except Exception as e:
-        logging.error(f"[CB-CRASH] user={call.from_user.id} data={call.data}: {e}", exc_info=True)
+        logging.error(f"[CB-CRASH] user={uid} data={call.data}: {e}", exc_info=True)
         try:
             await bot.answer_callback_query(call.id, "⚠️ حدث خطأ مؤقت، جرّب مرة أخرى")
         except Exception: pass
@@ -1389,6 +1598,9 @@ async def _cb_inner(call):
         if target.startswith("2135"):
             oo_clear(uid)
             digits = "0" + target[3:]
+            # ⭐ أوريدو: IP جديد
+            assigned = _acquire_proxy(uid, force_new=True)
+            if assigned: _ctx_proxy_url.set(assigned)
             result = await asyncio.to_thread(ooredoo_send_otp_sync, target)
             if not result.get("otp_sent"):
                 await bot.send_message(uid, "❌ تعذر الإرسال"); return
@@ -1417,7 +1629,6 @@ async def _cb_inner(call):
     if uid in user_steps and isinstance(user_steps[uid], dict):
         user_steps[uid]["last_activity"] = time.time()
 
-    # ==================== Admin Log Panel ====================
     if call.data == "admin_menu":
         if uid != ADMIN_ID: return
         await bot.send_message(uid, "🛠️ <b>لوحة الأدمن</b>", reply_markup=admin_menu_markup(), parse_mode='HTML')
@@ -1434,6 +1645,9 @@ async def _cb_inner(call):
         if not lines: await bot.send_message(uid, "📭 لا توجد سجلات 2Go"); return
         await bot.send_message(uid, format_logs_for_telegram(lines, "سجل 2Go"), parse_mode='HTML')
         return
+    if call.data == "admin_log_pool":
+        if uid != ADMIN_ID: return
+        await cmd_logpool(call.message); return
     if call.data == "admin_log_err":
         if uid != ADMIN_ID: return
         with _LOG_LOCK:
@@ -1456,8 +1670,6 @@ async def _cb_inner(call):
 
     if call.data == "delete_my_number":
         user = oo_load(uid)
-    if call.data == "delete_my_number":
-        user = oo_load(uid)
         dz_row = db_query("SELECT phone FROM numbers WHERE user_id=? LIMIT 1", (uid,), fetch=True)
         saved = []
         if dz_row: saved.append(f"🔴 <code>{dz_mask(dz_row[0])}</code> (جيزي)")
@@ -1473,18 +1685,20 @@ async def _cb_inner(call):
     if call.data == "delete_my_number_ok":
         db_query("DELETE FROM numbers WHERE user_id=?", (uid,))
         oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
+        _release_proxy(uid)
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
         await bot.send_message(uid, "✅ <b>تم الحذف</b>\n\n💡 أرسل رقمك من جديد", reply_markup=back_btn("main_menu"), parse_mode='HTML'); return
 
     if call.data == "change_phone":
         oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
+        _release_proxy(uid)
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
         await send_welcome(uid); return
 
     if call.data.startswith("oo_"):
         await oo_cb_handler(call); return
 
-    # ==================== DZ ====================
+    # ==================== DZ (جيزي — owlproxy فقط، بلا IP pool) ====================
     if call.data == "quick_offer_70_4g":
         nums = db_query("SELECT phone FROM numbers WHERE user_id=? ORDER BY added_date DESC LIMIT 1", (uid,), fetchall=True)
         if not nums: await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu")); return
@@ -1504,6 +1718,7 @@ async def _cb_inner(call):
             await _dz_request_new_otp(uid, ph); return
         if result.get("success"):
             inc_stat("total_offers")
+            # ⚠️ جيزي: بلا rotate
             await notify_group_success("70دج — 4GB", "Djezzy 🔴")
             await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=main_menu_markup(uid))
         else: await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=back_btn("main_menu"))
@@ -1609,13 +1824,14 @@ async def _cb_inner(call):
     if call.data in ("main_menu", "back_main"):
         await send_dz_menu(uid); return
 
-# ==================== OO Callbacks ====================
+# ==================== OO Callbacks (أوريدو — IP Pool + rotate) ====================
 async def oo_cb_handler(call):
     uid = call.from_user.id
     data = call.data
     user = oo_load(uid)
     if data == "oo_change":
         oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
+        _release_proxy(uid)
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
         await send_welcome(uid); return
     if data == "oo_back_menu":
@@ -1658,6 +1874,7 @@ async def oo_cb_handler(call):
         r = await asyncio.to_thread(oo_activate_snapchat, ms, at, meta)
         if r == "ok":
             inc_stat("oo_snap")
+            _rotate_user_proxy_after_success(uid)  # ⭐ أوريدو: rotate
             await notify_group_success("Snapchat", "Ooredoo 🟠")
             await send_result(uid, f"✅ <b>تم تفعيل سناب!</b>\n📱 <code>{o_mask(ms)}</code>", "oo_back_menu")
         elif r == "already_active":
@@ -1682,6 +1899,7 @@ async def oo_cb_handler(call):
         status = r.get("status", "error")
         if status == "ok":
             inc_stat("oo_20dzd_1go")
+            _rotate_user_proxy_after_success(uid)  # ⭐
             await notify_group_success("20دج — 1Go", "Ooredoo 🟠")
             await send_result(uid, f"✅ <b>تم التفعيل</b> 🎉\n📱 <code>{o_mask(ms)}</code>\n⚡ 1 جيجا — 24H", "oo_back_menu")
             return
@@ -1689,15 +1907,12 @@ async def oo_cb_handler(call):
             reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
         return
 
-    # ==================== 🎁 2Go FREE — مع cooldown 24 ساعة ====================
     if data == "oo_quick_free_2gb":
-        # 🔒 فحص cooldown
         last = oo_free2gb_get_last(uid, ms)
         elapsed = time.time() - last if last else 0
         if last and elapsed < COOLDOWN_FREE_2GB_OO:
             remaining = int(COOLDOWN_FREE_2GB_OO - elapsed)
-            hh = remaining // 3600
-            mmn = (remaining % 3600) // 60
+            hh = remaining // 3600; mmn = (remaining % 3600) // 60
             await bot.send_message(uid,
                 f"⏰ <b>راك مفعّل من قبل</b>\n"
                 f"━━━━━━━━━━━━━━━━\n\n"
@@ -1714,7 +1929,8 @@ async def oo_cb_handler(call):
 
         if status == "ok":
             inc_stat("oo_free_2gb")
-            oo_free2gb_save(uid, ms)  # ⭐ نسجّل الوقت
+            oo_free2gb_save(uid, ms)
+            _rotate_user_proxy_after_success(uid)  # ⭐
             await notify_group_success("2Go مجاني — 24H", "Ooredoo 🟠")
             await send_result(uid,
                 f"🎉 <b>مبروك عليك!</b>\n━━━━━━━━━━━━━━━━\n\n"
@@ -1728,7 +1944,6 @@ async def oo_cb_handler(call):
             return
 
         if status == "already":
-            # نحسب الوقت المتبقي إذا كنا سجّلناه، وإلا نفترض 24 ساعة كاملة
             oo_free2gb_save(uid, ms)
             hh = COOLDOWN_FREE_2GB_OO // 3600
             await bot.send_message(uid,
@@ -1766,13 +1981,16 @@ async def oo_cb_handler(call):
             await bot.send_message(uid, f"<b>🔍 تفاصيل للأدمن:</b>\ncode={r.get('code')}\n<pre>{_html.escape(str(r.get('data',{}))[:1500])}</pre>", parse_mode='HTML')
         return
 
-# ==================== TEXT HANDLER (محمي) ====================
+# ==================== TEXT HANDLER ====================
 @bot.message_handler(func=lambda m: True, content_types=['text'], chat_types=['private'])
 async def handle_text(message):
+    uid = message.from_user.id
+    _ctx_uid.set(uid)
+    _ctx_proxy_url.set(_proxy_assignments.get(uid))
     try:
         await _text_inner(message)
     except Exception as e:
-        logging.error(f"[TEXT-CRASH] user={message.from_user.id}: {e}", exc_info=True)
+        logging.error(f"[TEXT-CRASH] user={uid}: {e}", exc_info=True)
         try:
             await bot.send_message(message.chat.id, "⚠️ حدث خطأ مؤقت، جرّب مرة أخرى")
         except Exception: pass
@@ -1801,6 +2019,12 @@ async def _text_inner(message):
         if not is_phone:
             await bot.send_message(uid, "❌ رقم غير صحيح"); return
         msisdn = "213" + digits[1:]
+        # ⭐ أوريدو فقط: IP جديد من البول
+        if digits.startswith("05"):
+            assigned = _acquire_proxy(uid, force_new=True)
+            if assigned:
+                _ctx_proxy_url.set(assigned)
+                logging.info(f"[PROXY-POOL] ✅ {uid} أوريدو ← IP جديد: {assigned[:50]}")
         if digits.startswith(("07", "06")):
             row = db_query("SELECT token FROM numbers WHERE phone=? AND user_id=?", (msisdn, uid), fetch=True)
             if row and row[0] and row[0] != "EXPIRED":
@@ -1833,10 +2057,8 @@ async def _text_inner(message):
             await bot.send_message(uid, "⚠️ أرسل 6 أرقام فقط"); return
         otp = m.group(1); ms = step.get("msisdn"); device = step.get("device", {})
 
-        # ⭐ نعلم المستخدم أننا نتحقق (retry داخلي)
         wait_msg = None
-        try:
-            wait_msg = await bot.send_message(uid, "🔍 جاري التحقق... انتظر ثوانٍ")
+        try: wait_msg = await bot.send_message(uid, "🔍 جاري التحقق... انتظر ثوانٍ")
         except: pass
 
         result = await asyncio.to_thread(ooredoo_verify_otp_sync, ms, otp, device)
@@ -1864,8 +2086,7 @@ async def _text_inner(message):
         phone = step.get("phone")
 
         wait_msg = None
-        try:
-            wait_msg = await bot.send_message(uid, "🔍 جاري التحقق... انتظر ثوانٍ")
+        try: wait_msg = await bot.send_message(uid, "🔍 جاري التحقق... انتظر ثوانٍ")
         except: pass
 
         token = await asyncio.to_thread(dj_verify_otp, phone, text)
@@ -1900,8 +2121,11 @@ async def _text_inner(message):
 # ==================== Main ====================
 async def main():
     print("=" * 60)
-    print("🤖 البوت الموحّد v2 — جيزي + أوريدو + 6G + 2Go FREE")
+    print("🤖 البوت الموحّد v4")
     print(f"👤 الأدمن: {ADMIN_ID}")
+    print(f"🌐 IP Pool (أوريدو): {len(PROXY_POOL)} بروكسي")
+    print("   🔴 جيزي: owlproxy فقط")
+    print("   🟠 أوريدو: IP Pool (تدوير تلقائي)")
     print("=" * 60)
     saved = load_steps_saved()
     user_steps.update(saved)
@@ -1910,6 +2134,7 @@ async def main():
     threading.Thread(target=steps_saver_worker, daemon=True).start()
     threading.Thread(target=reset_steps_worker, daemon=True).start()
     threading.Thread(target=_proxy_proactive_rotate, daemon=True).start()
+    threading.Thread(target=proxy_cleanup_worker, daemon=True).start()
     print("✅ البوت يعمل...")
     await bot.infinity_polling(skip_pending=True, timeout=30)
 
