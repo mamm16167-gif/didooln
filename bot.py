@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""البوت الموحّد v5 — جيزي (OxyLabs) | أوريدو (IP Pool 100 + تدوير + فحص)"""
+"""البوت الموحّد v7 — جيزي (OxyLabs + سريع) | أوريدو (IP Pool + Direct)"""
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
-import asyncio, sqlite3, requests, random, time, re, json, os, uuid, base64, threading, logging, urllib3, hashlib, string, contextvars
-from datetime import datetime, timedelta, timezone as tz
+import asyncio, sqlite3, requests, random, time, re, json, os, uuid, base64, threading, logging, urllib3, string, contextvars
+from datetime import datetime
 from pathlib import Path
 from collections import deque, Counter
 import html as _html
@@ -13,10 +13,8 @@ import html as _html
 # ==================== 🎨 الأزرار الملوّنة ====================
 def _auto_button_style(text):
     t = str(text)
-    if "إلغاء" in t or t.strip().startswith("❌") or "🚫" in t or "حذف" in t:
-        return "danger"
-    if "تأكيد" in t or "اشترِ" in t or "دفع" in t or "🛒" in t:
-        return "success"
+    if "إلغاء" in t or t.strip().startswith("❌") or "🚫" in t or "حذف" in t: return "danger"
+    if "تأكيد" in t or "اشترِ" in t or "دفع" in t or "🛒" in t: return "success"
     return "primary"
 
 _orig_ikb_init = InlineKeyboardButton.__init__
@@ -25,9 +23,7 @@ def _new_ikb_init(self, *args, style=None, **kwargs):
     _orig_ikb_init(self, *args, **kwargs); self.style = style
 def _new_ikb_to_dict(self):
     d = _orig_ikb_to_dict(self)
-    if "style" not in d:
-        explicit = getattr(self, "style", None)
-        d["style"] = explicit if explicit else _auto_button_style(self.text)
+    if "style" not in d: d["style"] = getattr(self, "style", None) or _auto_button_style(self.text)
     return d
 InlineKeyboardButton.__init__ = _new_ikb_init
 InlineKeyboardButton.to_dict = _new_ikb_to_dict
@@ -40,12 +36,12 @@ TOKEN = "7924355653:AAHeIAyfFwEP1L-UtIGmnwo31PXzFWZsjxE"
 ADMIN_ID = 6860937572
 REQUIRED_CHANNEL = "@kfodoedjtu546m"
 CHANNEL_LINK = "https://t.me/kfodoedjtu546m"
+NOTIFY_GROUP = "@ifoekdjdh"
 
 DJ_CLIENT_ID = "87pIExRhxBb3_wGsA5eSEfyATloa"
 DJ_CLIENT_SECRET = "uf82p68Bgisp8Yg1Uz8Pf6_v1XYa"
 DJ_BASE = "https://apim.djezzy.dz/mobile-api"
-DJ_HEADERS = {'User-Agent': "MobileApp/3.0.0", 'Accept': "application/json",
-              'Content-Type': "application/json", 'accept-language': "fr", 'Connection': 'keep-alive'}
+DJ_HEADERS = {'User-Agent': "MobileApp/3.0.7", 'Accept': "application/json", 'Content-Type': "application/json", 'accept-language': "fr"}
 COOLDOWN_2GB = 604800
 COOLDOWN_6GB_DAILY = 86400
 COOLDOWN_FREE_2GB_OO = 86400
@@ -62,18 +58,15 @@ OO_CLIENT = "myooredoo-app"
 X_VERSION = "1.5.15"
 X_VERSION_OTP = "1.5.16"
 X_SIG = "5c7641dbb82cf11066df68afc91541c967640106a95192740b43d51a5ce6777a"
-NOTIFY_GROUP = "@ifoekdjdh"
 
 BASE_DIR = Path(os.path.expanduser("~")) / "unified_bot"
 SESSIONS_DIR = BASE_DIR / "sessions"
-for d in (BASE_DIR, SESSIONS_DIR):
-    d.mkdir(parents=True, exist_ok=True)
+for d in (BASE_DIR, SESSIONS_DIR): d.mkdir(parents=True, exist_ok=True)
 
-logging.basicConfig(level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(), logging.FileHandler(str(BASE_DIR / "bot.log"), encoding='utf-8')])
 
-# ==================== 🌐 الإعدادات الافتراضية للبروكسي ====================
+# ==================== 🌐 البروكسيات ====================
 PROXY_LIST_DEFAULT = """
 1c3kqov80uaa:pl37isqkvtla7o8@104.207.37.238:3129
 1c3kqov80uaa:pl37isqkvtla7o8@216.26.238.222:3129
@@ -85,6 +78,96 @@ PROXY_LIST_DEFAULT = """
 1c3kqov80uaa:pl37isqkvtla7o8@209.50.163.58:3129
 1c3kqov80uaa:pl37isqkvtla7o8@216.26.252.128:3129
 1c3kqov80uaa:pl37isqkvtla7o8@65.111.7.243:3129
+1c3kqov80uaa:pl37isqkvtla7o8@65.111.15.199:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.166.222:3129
+1c3kqov80uaa:pl37isqkvtla7o8@65.111.10.84:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.47.7:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.60.70:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.41.105:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.35.230:3129
+1c3kqov80uaa:pl37isqkvtla7o8@65.111.15.119:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.227.234:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.47.45:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.36.86:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.60.175:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.46.144:3129
+1c3kqov80uaa:pl37isqkvtla7o8@65.111.13.117:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.187.105:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.34.106:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.37.80:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.248.27:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.250.166:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.36.101:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.252.179:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.163.98:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.160.221:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.32.243:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.179.206:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.48.5:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.34.201:3129
+1c3kqov80uaa:pl37isqkvtla7o8@151.123.177.47:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.39.53:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.40.34:3129
+1c3kqov80uaa:pl37isqkvtla7o8@65.111.7.58:3129
+1c3kqov80uaa:pl37isqkvtla7o8@151.123.176.78:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.237.178:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.236.30:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.42.51:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.189.222:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.172.2:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.185.177:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.228.216:3129
+1c3kqov80uaa:pl37isqkvtla7o8@217.181.92.216:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.243.226:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.62.88:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.242.143:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.176.88:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.251.250:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.44.60:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.38.73:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.54.189:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.233.153:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.34.140:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.255.205:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.43.242:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.53.230:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.52.86:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.188.83:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.180.63:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.40.181:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.235.150:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.180.38:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.177.236:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.37.247:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.169.172:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.181.194:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.226.10:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.36.168:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.167.119:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.47.161:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.162.215:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.165.46:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.34.28:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.62.160:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.47.99:3129
+1c3kqov80uaa:pl37isqkvtla7o8@216.26.242.93:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.164.48:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.48.71:3129
+1c3kqov80uaa:pl37isqkvtla7o8@209.50.183.7:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.33.146:3129
+1c3kqov80uaa:pl37isqkvtla7o8@65.111.29.120:3129
+1c3kqov80uaa:pl37isqkvtla7o8@65.111.14.158:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.52.36:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.167.19.123:3129
+1c3kqov80uaa:pl37isqkvtla7o8@217.181.92.82:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.39.112:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.48.29:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.48.106:3129
+1c3kqov80uaa:pl37isqkvtla7o8@45.3.33.47:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.43.50:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.32.150:3129
+1c3kqov80uaa:pl37isqkvtla7o8@104.207.40.85:3129
+1c3kqov80uaa:pl37isqkvtla7o8@65.111.0.243:3129
 """
 
 OO_PROXIES_FILE = BASE_DIR / "oo_proxies.json"
@@ -100,22 +183,17 @@ def _load_oo_proxies():
     if OO_PROXIES_FILE.exists():
         try:
             data = json.loads(OO_PROXIES_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, list) and data:
-                logging.info(f"[PROXY-POOL] ✅ حمّل {len(data)} بروكسي من الملف")
-                return data
+            if isinstance(data, list) and data: return data
         except: pass
     pool = [x for x in (_normalize_proxy(l) for l in PROXY_LIST_DEFAULT.splitlines()) if x]
     _save_oo_proxies(pool)
-    logging.info(f"[PROXY-POOL] ✅ حمّل {len(pool)} بروكسي افتراضي")
     return pool
 
 def _save_oo_proxies(pool):
-    try:
-        OO_PROXIES_FILE.write_text(json.dumps(pool, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True
-    except: return False
+    try: OO_PROXIES_FILE.write_text(json.dumps(pool, ensure_ascii=False, indent=2), encoding="utf-8")
+    except: pass
 
-# ⭐ بروكسي جيزي (OxyLabs)
+# ⭐ بروكسي جيزي (OxyLabs) - سريع ومتغير
 OXYLABS_USER = "customer-resi_0614e541-cc-dz-city-algiers-sessid_oneip"
 OXYLABS_PASS = "GfOR31Pbb6~G"
 OXYLABS_HOST = "pr.oxylabs.io:7777"
@@ -125,22 +203,15 @@ def _load_dz_proxy():
     if DZ_PROXY_FILE.exists():
         try:
             data = json.loads(DZ_PROXY_FILE.read_text(encoding="utf-8"))
-            if isinstance(data, dict) and data.get("template"):
-                if "owlproxy" in data.get("template"):
-                    default = {"template": f"{OXYLABS_USER}-{'{SESSION}'}-sesstime-{OXYLABS_SESSTIME}:{OXYLABS_PASS}@{OXYLABS_HOST}"}
-                    _save_dz_proxy(default)
-                    return default
-                return data
+            if isinstance(data, dict) and data.get("template"): return data
         except: pass
-    default = {"template": f"{OXYLABS_USER}-{'{SESSION}'}-sesstime-{OXYLABS_SESSTIME}:{OXYLABS_PASS}@{OXYLABS_HOST}"}
+    default = {"template": f"{OXYLABS_USER}-{{SESSION}}-sesstime-{OXYLABS_SESSTIME}:{OXYLABS_PASS}@{OXYLABS_HOST}"}
     _save_dz_proxy(default)
     return default
 
 def _save_dz_proxy(d):
-    try:
-        DZ_PROXY_FILE.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
-        return True
-    except: return False
+    try: DZ_PROXY_FILE.write_text(json.dumps(d, ensure_ascii=False, indent=2), encoding="utf-8")
+    except: pass
 
 PROXY_POOL = _load_oo_proxies()
 
@@ -180,7 +251,7 @@ async def _validate_proxies_bulk(proxy_list, progress_cb=None, batch_size=20):
     await asyncio.gather(*[test_one(p) for p in proxy_list], return_exceptions=True)
     return valid, invalid
 
-# ==================== إدارة التعيينات ====================
+# ==================== إدارة التعيينات (أوريدو) ====================
 def _acquire_proxy(uid, force_new=False):
     if not PROXY_POOL: return None
     with _proxy_pool_lock:
@@ -210,7 +281,6 @@ def _release_proxy(uid):
         if uid in _proxy_assignments:
             p = _proxy_assignments.pop(uid)
             _proxy_last_used[p] = time.time()
-            logging.info(f"[PROXY-POOL] ♻️ {uid} حرّر IP")
 
 def _rotate_user_proxy_after_success(uid):
     _release_proxy(uid)
@@ -233,10 +303,10 @@ def _get_proxy_for_session():
     return None
 
 # ==================== OxyLabs (جيزي) ====================
-_current_session = ["".join(random.choices(string.digits, k=10))]
+_current_session = ["".join(random.choices(string.ascii_lowercase + string.digits, k=8))]
 _proxy_rotate_lock = threading.Lock()
 _last_rotate_time = [0.0]
-ROTATE_COOLDOWN = 3
+ROTATE_COOLDOWN = 2 # تسريع التبديل
 _proxy_fail_count = [0]
 _proxy_fail_until = [0.0]
 _proxy_fail_lock = threading.Lock()
@@ -245,8 +315,7 @@ def _build_proxy_url():
     dz = _load_dz_proxy()
     template = dz.get("template", "")
     if not template or "{SESSION}" not in template: return None
-    with _proxy_rotate_lock:
-        sess = _current_session[0]
+    with _proxy_rotate_lock: sess = _current_session[0]
     return f"http://{template.replace('{SESSION}', sess)}"
 
 def _rotate_proxy_session(force=False):
@@ -254,8 +323,7 @@ def _rotate_proxy_session(force=False):
         now = time.time()
         if not force and now - _last_rotate_time[0] < ROTATE_COOLDOWN: return False
         _last_rotate_time[0] = now
-        _current_session[0] = ''.join(random.choices(string.digits, k=10))
-    logging.warning(f"[OXYLABS] 🔄 session-{_current_session[0]}")
+        _current_session[0] = ''.join(random.choices(string.ascii_lowercase + string.digits, k=8))
     return True
 
 def _should_use_proxy():
@@ -263,20 +331,12 @@ def _should_use_proxy():
 def _mark_proxy_failed():
     with _proxy_fail_lock:
         _proxy_fail_count[0] += 1
-        if _proxy_fail_count[0] >= 3:
-            _proxy_fail_until[0] = time.time() + 30
-            _proxy_fail_count[0] = 0
-    _rotate_proxy_session()
+        if _proxy_fail_count[0] >= 3: _proxy_fail_until[0] = time.time() + 30; _proxy_fail_count[0] = 0
+    _rotate_proxy_session(force=True)
 def _mark_proxy_success():
-    with _proxy_fail_lock:
-        _proxy_fail_count[0] = 0
-        _proxy_fail_until[0] = 0.0
+    with _proxy_fail_lock: _proxy_fail_count[0] = 0; _proxy_fail_until[0] = 0.0
 
-RATE_PLAN_NAMES = {
-    "654": "Dima", "627": "N'YOOZ", "682": "N'YOOZ", "625": "La Gold", "626": "La Gold Jdida",
-    "628": "Ooredoo POP", "629": "Dima+", "630": "Anazik", "631": "Anafilx", "632": "YOOZ", "633": "Ooredoo Pro",
-}
-
+RATE_PLAN_NAMES = {"654": "Dima", "627": "N'YOOZ", "682": "N'YOOZ", "625": "La Gold", "626": "La Gold Jdida", "628": "Ooredoo POP", "629": "Dima+", "630": "Anazik", "631": "Anafilx", "632": "YOOZ", "633": "Ooredoo Pro"}
 PHONE_STICKER = "CAACAgIAAxkBAAIMG2mxR6mD0xL5WplUQ0sTGQ8aECNdAAJ3BQACP5XMCmWM0yxKQdlOOgQ"
 INACTIVITY_SECONDS = 300
 
@@ -360,8 +420,8 @@ async def safe_request(method, url, json=None, headers=None, timeout=15):
                         return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
                     except Exception as e:
                         logging.warning(f"[SAFE-REQ] oxy #{proxy_attempt+1}: {str(e)[:80]}")
-                        _rotate_proxy_session()
-                        if proxy_attempt == 0: time.sleep(0.3)
+                        _mark_proxy_failed()
+                        if proxy_attempt == 0: time.sleep(0.2)
         try:
             s = requests.Session(); s.verify = False
             r = s.request(method, url, json=json, headers=headers, timeout=timeout)
@@ -385,6 +445,7 @@ def _oo_req(method, url, headers, content=b"", timeout=20, use_proxy=True):
                     try: r.close()
                     except: pass
                     _mark_bad(_get_ctx_proxy(), uid=_get_ctx_uid(), duration=120)
+                    if proxy_attempt == 0: _acquire_proxy(_get_ctx_uid(), force_new=True)
                     continue
                 try: body = r.json()
                 except: body = {"_raw": r.text[:500]}
@@ -393,9 +454,9 @@ def _oo_req(method, url, headers, content=b"", timeout=20, use_proxy=True):
                 except: pass
                 return r.status_code, dict(r.headers), body
             except Exception as e:
-                logging.warning(f"[OO-REQ] pool #{proxy_attempt+1} {method} {url[:50]}: {str(e)[:80]}")
+                logging.warning(f"[OO-REQ] pool #{proxy_attempt+1}: {str(e)[:80]}")
                 _mark_bad(_get_ctx_proxy(), uid=_get_ctx_uid(), duration=120)
-                if proxy_attempt == 0: time.sleep(0.3)
+                if proxy_attempt == 0: _acquire_proxy(_get_ctx_uid(), force_new=True)
     try:
         s = requests.Session(); s.verify = False
         r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
@@ -425,8 +486,8 @@ def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, t
                     return r
                 except Exception as e:
                     logging.warning(f"[DZ-REQ] oxy #{proxy_attempt+1}: {str(e)[:80]}")
-                    _rotate_proxy_session()
-                    if proxy_attempt == 0: time.sleep(0.3)
+                    _mark_proxy_failed()
+                    if proxy_attempt == 0: time.sleep(0.2)
     try:
         s = _new_session(headers, use_proxy=False)
         if method == "GET": r = s.get(url, params=params, timeout=timeout)
@@ -436,8 +497,7 @@ def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, t
             else: r = s.post(url, params=params, timeout=timeout)
         else: r = s.request(method, url, params=params, timeout=timeout)
         return r
-    except Exception as e:
-        return None
+    except Exception as e: return None
 
 def dz_extract_msg(j):
     if not j: return ""
@@ -464,9 +524,7 @@ def proxy_cleanup_worker():
 
 def _proxy_proactive_rotate():
     while not _stop_threads.is_set():
-        try:
-            time.sleep(25 * 60)
-            _rotate_proxy_session(force=True)
+        try: time.sleep(25 * 60); _rotate_proxy_session(force=True)
         except: pass
 
 bot = AsyncTeleBot(TOKEN)
@@ -480,38 +538,25 @@ def init_db():
     c = conn.cursor()
     try: c.execute("PRAGMA journal_mode=WAL")
     except: pass
-    c.execute('''CREATE TABLE IF NOT EXISTS users 
-                 (user_id INTEGER PRIMARY KEY, username TEXT, join_date TEXT, 
-                  is_logged_in INTEGER DEFAULT 0, last_phone TEXT)''')
+    c.execute('''CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY, username TEXT, join_date TEXT, is_logged_in INTEGER DEFAULT 0, last_phone TEXT)''')
     try: c.execute("ALTER TABLE users ADD COLUMN last_phone TEXT")
     except: pass
-    c.execute('''CREATE TABLE IF NOT EXISTS numbers 
-                 (phone TEXT PRIMARY KEY, user_id INTEGER, token TEXT,
-                  last_activation_2gb REAL DEFAULT 0,
-                  last_activation_3gb REAL DEFAULT 0,
-                  last_activation_6gb_daily REAL DEFAULT 0,
-                  last_activation_offers REAL DEFAULT 0, added_date TEXT)''')
-    needed = {'user_id': 'INTEGER', 'token': 'TEXT', 'last_activation_2gb': 'REAL DEFAULT 0',
-              'last_activation_3gb': 'REAL DEFAULT 0', 'last_activation_6gb_daily': 'REAL DEFAULT 0',
-              'last_activation_offers': 'REAL DEFAULT 0', 'added_date': 'TEXT'}
+    c.execute('''CREATE TABLE IF NOT EXISTS numbers (phone TEXT PRIMARY KEY, user_id INTEGER, token TEXT, last_activation_2gb REAL DEFAULT 0, last_activation_3gb REAL DEFAULT 0, last_activation_6gb_daily REAL DEFAULT 0, last_activation_offers REAL DEFAULT 0, added_date TEXT)''')
+    needed = {'user_id': 'INTEGER', 'token': 'TEXT', 'last_activation_2gb': 'REAL DEFAULT 0', 'last_activation_3gb': 'REAL DEFAULT 0', 'last_activation_6gb_daily': 'REAL DEFAULT 0', 'last_activation_offers': 'REAL DEFAULT 0', 'added_date': 'TEXT'}
     existing_nums = [r[1] for r in c.execute("PRAGMA table_info(numbers)").fetchall()]
     for col, col_type in needed.items():
         if col not in existing_nums:
             try: c.execute(f"ALTER TABLE numbers ADD COLUMN {col} {col_type}")
             except: pass
     c.execute('''CREATE TABLE IF NOT EXISTS stats (id INTEGER PRIMARY KEY)''')
-    if c.execute("SELECT COUNT(*) FROM stats WHERE id = 1").fetchone()[0] == 0:
-        c.execute("INSERT INTO stats (id) VALUES (1)")
-    all_cols = ["total_2gb","total_3gb","total_6gb_daily","total_offers","oo_logins","oo_snap","oo_spins",
-                "oo_balance","oo_offers_view","dz_logins","oo_soccer_enrolls","oo_20dzd_1go",
-                "oo_gift_plays","oo_gift_won","oo_gifts_total","oo_free_2gb","oo_bundles"]
+    if c.execute("SELECT COUNT(*) FROM stats WHERE id = 1").fetchone()[0] == 0: c.execute("INSERT INTO stats (id) VALUES (1)")
+    all_cols = ["total_2gb","total_3gb","total_6gb_daily","total_offers","oo_logins","oo_snap","oo_spins","oo_balance","oo_offers_view","dz_logins","oo_soccer_enrolls","oo_20dzd_1go","oo_gift_plays","oo_gift_won","oo_gifts_total","oo_free_2gb","oo_bundles"]
     existing = [r[1] for r in c.execute("PRAGMA table_info(stats)").fetchall()]
     for col in all_cols:
         if col not in existing:
             try: c.execute(f"ALTER TABLE stats ADD COLUMN {col} INTEGER DEFAULT 0")
             except: pass
     conn.commit(); conn.close()
-
 init_db()
 
 def db_query(q, p=(), fetch=False, fetchall=False):
@@ -536,33 +581,28 @@ def save_steps():
     try:
         clean = {}
         for k, v in list(user_steps.items()):
-            if isinstance(v, dict):
-                clean[str(k)] = {kk: vv for kk, vv in v.items() if kk in ("step","phone","msisdn","display","last_activity")}
+            if isinstance(v, dict): clean[str(k)] = {kk: vv for kk, vv in v.items() if kk in ("step","phone","msisdn","display","last_activity")}
             else: clean[str(k)] = v
         STEPS_FILE.write_text(json.dumps(clean, ensure_ascii=False))
     except: pass
 
 def load_steps_saved():
     try:
-        if STEPS_FILE.exists():
-            d = json.loads(STEPS_FILE.read_text())
-            return {int(k): v for k, v in d.items()}
+        if STEPS_FILE.exists(): return {int(k): v for k, v in json.loads(STEPS_FILE.read_text()).items()}
     except: pass
     return {}
 
-# ==================== 🔴 دوال جيزي ====================
+# ==================== 🔴 جيزي (سريع) ====================
 def dj_request_otp(phone):
     url = f"{DJ_BASE}/oauth2/registration"
     params = {'msisdn': phone, 'client_id': DJ_CLIENT_ID, 'scope': "smsotp"}
     payload = {"consent-agreement": [{"marketing-notifications": False}], "is-consent": True}
-    for ua in ["MobileApp/3.0.7", "MobileApp/3.0.0", "okhttp/4.12.0"]:
-        h = DJ_HEADERS.copy(); h['User-Agent'] = ua
-        r = _dz_req("POST", url, headers=h, params=params, json_body=payload, timeout=15)
-        if r is None: time.sleep(0.5); continue
-        if r.status_code == 200: return True
-        if r.status_code in (429, 400): return False
-        time.sleep(0.5)
-    return False
+    h = DJ_HEADERS.copy(); h['User-Agent'] = "MobileApp/3.0.7"
+    r = _dz_req("POST", url, headers=h, params=params, json_body=payload, timeout=12)
+    if r is None:
+        _rotate_proxy_session(force=True)
+        r = _dz_req("POST", url, headers=h, params=params, json_body=payload, timeout=12)
+    return r is not None and r.status_code == 200
 
 def dj_verify_otp(phone, otp):
     url = f"{DJ_BASE}/oauth2/token"
@@ -573,7 +613,7 @@ def dj_verify_otp(phone, otp):
     last_status = 0
     for attempt in range(OTP_VERIFY_MAX_RETRY):
         if attempt > 0: time.sleep(OTP_VERIFY_MIN_WAIT)
-        r = _dz_req("POST", url, headers=h, data=payload, timeout=25)
+        r = _dz_req("POST", url, headers=h, data=payload, timeout=20)
         if r is None: continue
         last_status = r.status_code
         if r.status_code == 200:
@@ -587,7 +627,7 @@ def dj_check_balance(token, phone):
     h = DJ_HEADERS.copy(); h['Authorization'] = f"Bearer {token}"; h['User-Agent'] = "MobileApp/3.0.7"
     url = f"{DJ_BASE}/api/v1/subscribers/main-balance/{phone}"
     for attempt in range(2):
-        r = _dz_req("GET", url, headers=h, timeout=15)
+        r = _dz_req("GET", url, headers=h, timeout=12)
         if r is None: continue
         if r.status_code == 200:
             try:
@@ -610,12 +650,10 @@ async def dz_activate_paid_offer_async(token, phone, package_code, offer_type, o
     async def _try_post(url, label):
         r = await safe_request('POST', url, json={"packageCode": package_code}, headers=h, timeout=12)
         if r['status'] == 401: return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك"}
-        if r['status'] in [200, 201, 202]:
-            return {"success": True, "token_expired": False, "msg": f"✅ ━━━ تم التفعيل بنجاح ━━━\n\n🎉 {offer_name}\n💰 السعر: {price} د.ج\n\n{PAGE_FOLLOW_TEXT}"}
+        if r['status'] in [200, 201, 202]: return {"success": True, "token_expired": False, "msg": f"✅ ━━━ تم التفعيل بنجاح ━━━\n\n🎉 {offer_name}\n💰 السعر: {price} د.ج\n\n{PAGE_FOLLOW_TEXT}"}
         if r['status'] == 402: return {"success": False, "token_expired": False, "msg": f"❌ رصيدك غير كافي لتفعيل {offer_name}\n💰 المطلوب: {price} د.ج"}
         srv = dz_extract_msg(r['json']); code = r.get('status', '?')
-        info = srv if srv else f"كود: {code}"
-        return {"success": False, "token_expired": False, "msg": f"⚠️ تعذر تفعيل {offer_name}\n\nℹ️ {info}"}
+        return {"success": False, "token_expired": False, "msg": f"⚠️ تعذر تفعيل {offer_name}\n\nℹ️ {srv or code}"}
     if offer_type == "shake":
         shake_url = f"{DZ_BASE_URL}/api/v1/services/shake/{phone}"
         for _ in range(4):
@@ -635,8 +673,7 @@ async def dz_activate_offer_70_4g_async(token, phone):
     async def _try_post(url, label):
         r = await safe_request('POST', url, json={"packageCode": "BTLINTSPEEDDAY2GO"}, headers=h, timeout=12)
         if r.get('status') == 401: return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك"}
-        if r.get('status') in [200, 201, 202]:
-            return {"success": True, "token_expired": False, "msg": f"✅ ━━━ تم التفعيل بنجاح ━━━\n\n🟢 عرض: 4 جيجابايت\n💰 السعر: 70 د.ج\n⏱️ الصلاحية: 24 ساعة\n\n{PAGE_FOLLOW_TEXT}"}
+        if r.get('status') in [200, 201, 202]: return {"success": True, "token_expired": False, "msg": f"✅ ━━━ تم التفعيل بنجاح ━━━\n\n🟢 عرض: 4 جيجابايت\n💰 السعر: 70 د.ج\n⏱️ الصلاحية: 24 ساعة\n\n{PAGE_FOLLOW_TEXT}"}
         if r.get('status') == 402: return {"success": False, "token_expired": False, "msg": "❌ رصيدك غير كافٍ"}
         srv = dz_extract_msg(r.get('json'))
         return {"success": False, "token_expired": False, "msg": f"⚠️ تعذر التفعيل\nℹ️ {srv or r.get('status')}"}
@@ -657,8 +694,7 @@ async def dz_activate_offer_90_5g_async(token, phone):
     async def _try_post(url, label):
         r = await safe_request('POST', url, json={"packageCode": "BTL500MBDAY"}, headers=h, timeout=12)
         if r.get('status') == 401: return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك"}
-        if r.get('status') in [200, 201, 202]:
-            return {"success": True, "token_expired": False, "msg": f"✅ ━━━ تم التفعيل بنجاح ━━━\n\n🟣 عرض: 5 جيجابايت\n💰 السعر: 90 د.ج\n⏱️ الصلاحية: 24 ساعة\n\n{PAGE_FOLLOW_TEXT}"}
+        if r.get('status') in [200, 201, 202]: return {"success": True, "token_expired": False, "msg": f"✅ ━━━ تم التفعيل بنجاح ━━━\n\n🟣 عرض: 5 جيجابايت\n💰 السعر: 90 د.ج\n⏱️ الصلاحية: 24 ساعة\n\n{PAGE_FOLLOW_TEXT}"}
         if r.get('status') == 402: return {"success": False, "token_expired": False, "msg": "❌ رصيدك غير كافٍ"}
         srv = dz_extract_msg(r.get('json'))
         return {"success": False, "token_expired": False, "msg": f"⚠️ تعذر التفعيل\nℹ️ {srv or r.get('status')}"}
@@ -679,14 +715,12 @@ def dj_activate_2gb(token, phone):
     endpoints = [f"{DJ_BASE}/api/v1/services/shake/{phone}", f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}", f"{DJ_BASE}/api/v1/subscribers/activate-product/{phone}"]
     last_code = 0
     for url in endpoints:
-        r = _dz_req("POST", url, headers=h, json_body={"packageCode": "GIFTWALKWIN2GO"}, timeout=20)
+        r = _dz_req("POST", url, headers=h, json_body={"packageCode": "GIFTWALKWIN2GO"}, timeout=15)
         if r is None: continue
         last_code = r.status_code
         if r.status_code == 401: return "EXPIRED"
         if r.status_code in (200, 201):
-            try: body = r.text.lower()
-            except: body = ""
-            if "already" in body: return "LIMIT"
+            if "already" in r.text.lower(): return "LIMIT"
             return "SUCCESS"
         if r.status_code == 402: return "NO_BALANCE"
         if r.status_code == 429: return "RATE_LIMIT"
@@ -696,7 +730,11 @@ def dj_activate_2gb(token, phone):
 
 def dj_activate_6gb_daily(token, phone):
     h = DJ_HEADERS.copy(); h['Authorization'] = f"Bearer {token}"; h['User-Agent'] = "MobileApp/3.0.9"
-    endpoints = [f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}", f"{DJ_BASE}/api/v1/services/shake/{phone}", f"{DJ_BASE}/api/v1/subscribers/activate-product/{phone}"]
+    
+    # ⭐ Warmup (تسخين) باش نتفاداو التفعيل الوهمي
+    _dz_req("GET", f"{DJ_BASE}/api/v1/services/shake/{phone}", headers=h, timeout=10)
+    
+    endpoints = [f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}", f"{DJ_BASE}/api/v1/services/shake/{phone}"]
     last_code = 0
     for url in endpoints:
         try:
@@ -705,10 +743,15 @@ def dj_activate_6gb_daily(token, phone):
             last_code = r.status_code
             if r.status_code == 401: return "EXPIRED"
             if r.status_code in (200, 201):
-                try: body = r.text.lower()
-                except: body = ""
-                if "already" in body: return "LIMIT"
-                return "SUCCESS"
+                try:
+                    j = r.json()
+                    msg = str(j.get("message", "")).lower()
+                    # ⭐ فحص الرد الحقيقي
+                    if "already" in msg: return "LIMIT"
+                    if "successfully" in msg or not msg: return "SUCCESS"
+                    if j.get("status") == 200: return "SUCCESS"
+                except:
+                    return "SUCCESS" # Fallback
             if r.status_code == 402: return "NO_BALANCE"
             if r.status_code == 429: return "RATE_LIMIT"
             time.sleep(0.3)
@@ -716,7 +759,7 @@ def dj_activate_6gb_daily(token, phone):
     if last_code == 403: return "NOT_ALLOWED"
     return "FAILED"
 
-# ==================== 🟠 دوال أوريدو ====================
+# ==================== 🟠 أوريدو ====================
 def _now_ms(): return str(int(time.time() * 1000))
 def _iid(): return str(uuid.uuid4()) + _now_ms()
 def _pld(x): return base64.b64encode(json.dumps({"platform":"android","is-physical-device":True,"device-id":x},separators=(",",":")).encode()).decode()
@@ -999,6 +1042,7 @@ def reset_steps_worker():
                 if _last_otp_sent[k] < cutoff: _last_otp_sent.pop(k, None)
             save_steps()
         except: pass
+
 # ==================== 📝 النصوص والقوائم ====================
 WELCOME_HEADER = ("مرحبا بك في موح بوت 👋\n\n"
     "بوت موح يقدم تفعيل عروض انترنت في مختلف الشبكات الجزائرية 🇩🇿\n\n"
@@ -1436,12 +1480,10 @@ async def _cb_inner(call):
         with _LOG_LOCK: _LOG_BUFFER.clear()
         await bot.send_message(uid, "🗑️ تم مسح السجل"); return
 
-    # ⭐ Admin: إضافة بروكسي أوريدو
     if call.data == "admin_add_oo_proxy":
         if uid != ADMIN_ID: return
         _admin_input[uid] = {"mode": "oo_proxies"}
-        await bot.send_message(uid, "✍️ <b>أرسل البروكسيات (كل بروكسي في سطر)</b>\n\nمثال:\n<code>user:pass@ip:port</code>\n\nسيتم فحصها وإضافتها تلقائياً.", parse_mode='HTML'); return
-    # ⭐ Admin: تعديل بروكسي جيزي
+        await bot.send_message(uid, "✍️ <b>أرسل البروكسيات (كل بروكسي في سطر)</b>\n\nسيتم فحصها وإضافتها تلقائياً.", parse_mode='HTML'); return
     if call.data == "admin_edit_dz_proxy":
         if uid != ADMIN_ID: return
         current = _load_dz_proxy().get("template", "")
@@ -1566,6 +1608,7 @@ async def _cb_inner(call):
             bal = await asyncio.to_thread(dj_check_balance, row[0], ph)
             if bal.get("status") == "EXPIRED":
                 db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (ph,))
+                await _dz_request_new_otp(uid, ph
                 await _dz_request_new_otp(uid, ph); return
             cur = bal.get("balance", 0)
             if price > 0 and cur < price:
@@ -1816,7 +1859,7 @@ async def _text_inner(message):
 # ==================== Main ====================
 async def main():
     print("=" * 60)
-    print("🤖 البوت الموحّد v5 — جيزي (OxyLabs) + أوريدو (IP Pool)")
+    print("🤖 البوت الموحّد v7 — جيزي (OxyLabs) + أوريدو (IP Pool)")
     print(f"👤 الأدمن: {ADMIN_ID}")
     print(f"🌐 IP Pool (أوريدو): {len(PROXY_POOL)} بروكسي")
     print("=" * 60)
