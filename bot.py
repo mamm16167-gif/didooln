@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""البوت الموحّد — جيزي 🔴 + أوريدو 🟠 + 6G مجاناً + 2Go FREE + 📋 سجل للأدمن"""
+"""البوت الموحّد v2 — جيزي 🔴 + أوريدو 🟠 + 6G مجاناً + 2Go FREE + 📋 سجل"""
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -52,8 +52,11 @@ DJ_HEADERS = {'User-Agent': "MobileApp/3.0.0", 'Accept': "application/json",
               'Content-Type': "application/json", 'accept-language': "fr", 'Connection': 'keep-alive'}
 COOLDOWN_2GB = 604800
 COOLDOWN_3GB = 604800
-COOLDOWN_6GB_DAILY = 86400          # ⭐ جديد
-OTP_RESEND_COOLDOWN = 60            # ⭐ جديد
+COOLDOWN_6GB_DAILY = 86400
+COOLDOWN_FREE_2GB_OO = 86400         # ⭐ 24h
+OTP_RESEND_COOLDOWN = 60
+OTP_VERIFY_MIN_WAIT = 3              # ⭐ ثواني انتظار قبل التحقق
+OTP_VERIFY_MAX_RETRY = 3             # ⭐ محاولات
 DZ_HEADERS = DJ_HEADERS
 DZ_BASE_URL = DJ_BASE
 PAGE_FOLLOW_TEXT = f"📢 تابع قناتنا: {CHANNEL_LINK}"
@@ -306,7 +309,7 @@ def dz_extract_msg(j):
 
 bot = AsyncTeleBot(TOKEN)
 user_steps = {}
-_last_otp_sent = {}        # ⭐ {uid: timestamp}
+_last_otp_sent = {}
 
 # ==================== DB ====================
 def init_db():
@@ -404,6 +407,7 @@ def dj_request_otp(phone):
         time.sleep(0.5)
     return False
 
+# ⭐ إصلاح: retry 3 مرات بـ 3 ثواني بين كل محاولة
 def dj_verify_otp(phone, otp):
     url = f"{DJ_BASE}/oauth2/token"
     clean = ''.join(filter(str.isdigit, otp))
@@ -411,15 +415,23 @@ def dj_verify_otp(phone, otp):
     payload = {'otp': clean, 'mobileNumber': phone, 'scope': "djezzyAppV2",
                'client_id': DJ_CLIENT_ID, 'client_secret': DJ_CLIENT_SECRET, 'grant_type': "mobile"}
     h = DJ_HEADERS.copy(); h['Content-Type'] = "application/x-www-form-urlencoded"
-    for i in range(2):
+    last_status = 0
+    for attempt in range(OTP_VERIFY_MAX_RETRY):
+        if attempt > 0:
+            time.sleep(OTP_VERIFY_MIN_WAIT)
         r = _dz_req("POST", url, headers=h, data=payload, timeout=25)
-        if r is None: time.sleep(2); continue
-        logging.info(f"[DJ-VERIFY] {phone} → {r.status_code}")
+        if r is None:
+            continue
+        last_status = r.status_code
+        logging.info(f"[DJ-VERIFY] {phone} attempt {attempt+1} → {r.status_code}")
         if r.status_code == 200:
             try: return r.json().get('access_token')
             except: return None
-        if r.status_code == 401: return "EXPIRED"
-        time.sleep(2)
+        if r.status_code == 429:
+            return None
+        # 401/400: retry (قد يكون propagation delay)
+    if last_status == 401:
+        return "EXPIRED"
     return None
 
 def dj_check_balance(token, phone):
@@ -546,9 +558,7 @@ def dj_activate_2gb(token, phone):
     if last_code == 403: return "NOT_ALLOWED"
     return "FAILED"
 
-# ⭐ جديد: 6 جيجا — 24 ساعة مجاناً
 def dj_activate_6gb_daily(token, phone):
-    """🎁 6 جيجا — 24 ساعة — مجاناً (GIFTWALKWIN6GDAY)"""
     h = DJ_HEADERS.copy()
     h['Authorization'] = f"Bearer {token}"
     h['User-Agent'] = "MobileApp/3.0.9"
@@ -562,27 +572,21 @@ def dj_activate_6gb_daily(token, phone):
         try:
             r = _dz_req("POST", url, headers=h,
                         json_body={"packageCode": "GIFTWALKWIN6GDAY"}, timeout=20)
-            if r is None:
-                continue
+            if r is None: continue
             last_code = r.status_code
-            if r.status_code == 401:
-                return "EXPIRED"
+            if r.status_code == 401: return "EXPIRED"
             if r.status_code in (200, 201):
                 try: body = r.text.lower()
                 except: body = ""
-                if "already" in body:
-                    return "LIMIT"
+                if "already" in body: return "LIMIT"
                 return "SUCCESS"
-            if r.status_code == 402:
-                return "NO_BALANCE"
-            if r.status_code == 429:
-                return "RATE_LIMIT"
+            if r.status_code == 402: return "NO_BALANCE"
+            if r.status_code == 429: return "RATE_LIMIT"
             time.sleep(0.3)
         except Exception as e:
             logging.warning(f"[DJ-6GB] {url[:60]}: {e}")
             continue
-    if last_code == 403:
-        return "NOT_ALLOWED"
+    if last_code == 403: return "NOT_ALLOWED"
     return "FAILED"
 
 # ==================== أوريدو ====================
@@ -670,39 +674,57 @@ def ooredoo_send_otp_sync(msisdn):
         logging.error(f"❌ OOREDOO OTP: {e}")
         return {"device": device, "otp_sent": False, "status": -1, "reason": "exception"}
 
+# ⭐ إصلاح: retry 3 مرات
 def ooredoo_verify_otp_sync(msisdn, otp, device):
     iid_val = device.get("instance_id") or _iid()
     psig = device.get("plat_sig") or _pld(iid_val)
     fp_otp = device.get("fp") or _fp()
-    ts = _now_ms()
-    nonce, chronos = "", ""
-    try:
-        h6 = _base_hdrs(msisdn, iid_val, psig, _corr(), ts, fp=fp_otp)
-        h6["x-version"] = X_VERSION_OTP
-        h6.update({"content-type":"application/json; charset=utf-8",
-                   "x-native-integrity-token":INTEGRITY_2,
-                   "x-path":"/api/auth/realms/myooredoo/protocol/openid-connect/token","x-method":"POST"})
-        _, rh6, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h6, b"{}", timeout=15)
-        nonce = rh6.get("x-nonce-id") or rh6.get("X-Nonce-Id") or ""
-        chronos = rh6.get("x-chronos-id") or rh6.get("X-Chronos-Id") or ""
-    except: pass
-    h7 = {"User-Agent":"Dart/3.11 (dart:io)","Accept-Encoding":"gzip","x-msisdn":msisdn,
-          "x-device-fingerprint":fp_otp,"x-platform-origin":"mobile-android",
-          "platform":"android","x-version":X_VERSION_OTP,"x-signature":X_SIG,
-          "x-timestamp":ts,"x-platform-info":psig,"x-force-update":"true",
-          "x-instance-id":iid_val,"content-type":"application/x-www-form-urlencoded"}
-    if nonce: h7["x-nonce-id"] = nonce
-    if chronos: h7["x-chronos-id"] = chronos
-    body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}&otp={otp}"
-    c7, _, j7 = _oo_req("POST", OO_AUTH, h7, body, timeout=30)
-    logging.info(f"[OO-VERIFY] {msisdn} → {c7}")
-    if c7 == 200 and isinstance(j7, dict) and "access_token" in j7:
-        at = j7["access_token"]
-        return {"access_token": at, "refresh_token": j7.get("refresh_token",""),
-                "expires_in": j7.get("expires_in", 0), "tok_fingerprint": fp_otp,
-                "tok_instance_id": _exdid(at) or iid_val, "tok_plat_sig": _mps(at),
-                "tok_timestamp": ts, "issued_at": int(time.time())}
-    if c7 in (400, 401, 403): return "wrong_otp"
+
+    def _one_attempt():
+        ts = _now_ms()
+        nonce, chronos = "", ""
+        try:
+            h6 = _base_hdrs(msisdn, iid_val, psig, _corr(), ts, fp=fp_otp)
+            h6["x-version"] = X_VERSION_OTP
+            h6.update({"content-type":"application/json; charset=utf-8",
+                       "x-native-integrity-token":INTEGRITY_2,
+                       "x-path":"/api/auth/realms/myooredoo/protocol/openid-connect/token","x-method":"POST"})
+            _, rh6, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h6, b"{}", timeout=15)
+            nonce = rh6.get("x-nonce-id") or rh6.get("X-Nonce-Id") or ""
+            chronos = rh6.get("x-chronos-id") or rh6.get("X-Chronos-Id") or ""
+        except: pass
+        h7 = {"User-Agent":"Dart/3.11 (dart:io)","Accept-Encoding":"gzip","x-msisdn":msisdn,
+              "x-device-fingerprint":fp_otp,"x-platform-origin":"mobile-android",
+              "platform":"android","x-version":X_VERSION_OTP,"x-signature":X_SIG,
+              "x-timestamp":ts,"x-platform-info":psig,"x-force-update":"true",
+              "x-instance-id":iid_val,"content-type":"application/x-www-form-urlencoded"}
+        if nonce: h7["x-nonce-id"] = nonce
+        if chronos: h7["x-chronos-id"] = chronos
+        body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}&otp={otp}"
+        c7, _, j7 = _oo_req("POST", OO_AUTH, h7, body, timeout=30)
+        return c7, j7
+
+    last_status = 0
+    for attempt in range(OTP_VERIFY_MAX_RETRY):
+        if attempt > 0:
+            time.sleep(OTP_VERIFY_MIN_WAIT)
+        try:
+            c7, j7 = _one_attempt()
+            last_status = c7
+            logging.info(f"[OO-VERIFY] {msisdn} attempt {attempt+1} → {c7}")
+            if c7 == 200 and isinstance(j7, dict) and "access_token" in j7:
+                at = j7["access_token"]
+                return {"access_token": at, "refresh_token": j7.get("refresh_token",""),
+                        "expires_in": j7.get("expires_in", 0), "tok_fingerprint": fp_otp,
+                        "tok_instance_id": _exdid(at) or iid_val, "tok_plat_sig": _mps(at),
+                        "tok_timestamp": _now_ms(), "issued_at": int(time.time())}
+            if c7 == 429:
+                return None
+        except Exception as e:
+            logging.error(f"[OO-VERIFY] attempt {attempt+1}: {e}")
+            continue
+    if last_status in (400, 401, 403):
+        return "wrong_otp"
     return None
 
 def ooredoo_refresh_token_sync(msisdn, rt, device):
@@ -728,7 +750,7 @@ def ooredoo_refresh_token_sync(msisdn, rt, device):
         return {"access_token": at, "refresh_token": j2.get("refresh_token", rt),
                 "expires_in": j2.get("expires_in", 0),
                 "tok_instance_id": _exdid(at) or iid_val, "tok_plat_sig": _mps(at),
-                "tok_fingerprint": fp_otp, "tok_timestamp": ts, "issued_at": int(time.time())}
+                "tok_fingerprint": fp_otp, "tok_timestamp": _now_ms(), "issued_at": int(time.time())}
     return None
 
 def oo_check_balance(msisdn, at, meta):
@@ -795,10 +817,18 @@ def oo_purchase_20dzd_1go(msisdn, at, meta):
     if c == 401: return {"status": "purchase_blocked"}
     return {"status": "error", "code": c}
 
+# ⭐ إصلاح جذري: لا نعتبر 500 = "already" تلقائياً
 def oo_purchase_free_2gb(msisdn, at, meta):
     body_simple = json.dumps({"bundleCode": "BTL_24H_DATA_Free_2Go"}, separators=(",", ":"))
     body_full = json.dumps({"bundleCode": "BTL_24H_DATA_Free_2Go",
                             "validity": "day", "validityAmount": "1"}, separators=(",", ":"))
+
+    endpoints = [
+        ("bundlePurchase", f"{OO_BFF}/cvm/bundlePurchase"),
+        ("dynamic-bundle", f"{OO_BFF}/cvm/dynamic-bundle-purchase"),
+    ]
+    bodies = [("simple", body_simple), ("full", body_full)]
+
     def _try(url, body, label):
         try:
             h = _web_hdrs(msisdn, at, meta, "application/json; charset=utf-8")
@@ -808,33 +838,34 @@ def oo_purchase_free_2gb(msisdn, at, meta):
         except Exception as e:
             logging.error(f"[OO-FREE-2GB][{label}] {msisdn}: {e}")
             return 0, {"_error": str(e)[:100]}
-    bp_url = f"{OO_BFF}/cvm/bundlePurchase"
-    dyn_url = f"{OO_BFF}/cvm/dynamic-bundle-purchase"
-    combos = [
-        ("bundlePurchase simple", bp_url, body_simple),
-        ("bundlePurchase full",   bp_url, body_full),
-        ("dynamic simple",        dyn_url, body_simple),
-        ("dynamic full",          dyn_url, body_full),
-    ]
-    last_c, last_resp = 0, None
-    for label, url, body in combos:
-        c, resp = _try(url, body, label)
-        last_c, last_resp = c, resp
-        if c in (200, 201): return {"status": "ok", "data": resp}
-        if c == 500: return {"status": "already", "data": resp}
-        if c in (402, 409):
-            srv = str(resp).upper()
-            if any(k in srv for k in ("ALREADY", "DÉJÀ", "PURCHASED", "SUBSCRIBED", "EXIST")):
-                return {"status": "already", "data": resp}
-            if any(k in srv for k in ("CREDIT", "BALANCE")):
-                return {"status": "no_balance", "data": resp}
-        if c == 400:
-            srv = str(resp).lower()
-            if "already" in srv or "déjà" in srv:
-                return {"status": "already", "data": resp}
-    if last_c == 401: return {"status": "unauthorized", "data": last_resp}
-    if last_c in (402, 409): return {"status": "not_allowed", "data": last_resp}
-    return {"status": "error", "code": last_c, "data": last_resp}
+
+    already_seen = None
+
+    for round_idx in range(2):
+        if round_idx > 0:
+            time.sleep(2)
+        for ep_label, url in endpoints:
+            for body_label, body in bodies:
+                c, resp = _try(url, body, f"r{round_idx+1}|{ep_label}|{body_label}")
+
+                if c in (200, 201):
+                    return {"status": "ok", "data": resp}
+
+                # فقط إذا الرسالة فعلاً فيها "already" نعتبرها مفعلة
+                resp_str = str(resp).lower()
+                if any(k in resp_str for k in ("already", "déjà", "purchased", "subscribed", "duplicate", "exist")):
+                    already_seen = resp
+                    continue
+
+                if c == 401:
+                    return {"status": "unauthorized", "data": resp}
+                if c == 429:
+                    time.sleep(3)
+                    break  # retry next round
+
+    if already_seen is not None:
+        return {"status": "already", "data": already_seen}
+    return {"status": "error", "data": None}
 
 # ==================== Sessions ====================
 def oo_save(uid, d): (SESSIONS_DIR / f"oo_{uid}.json").write_text(json.dumps(d, ensure_ascii=False))
@@ -844,6 +875,7 @@ def oo_load(uid):
 def oo_clear(uid):
     f = SESSIONS_DIR / f"oo_{uid}.json"
     if f.exists(): f.unlink()
+
 def dz_save_session(uid, phone, token):
     try: (SESSIONS_DIR / f"dz_{uid}.json").write_text(json.dumps({"phone": phone, "token": token, "issued_at": time.time()}, ensure_ascii=False))
     except: pass
@@ -855,6 +887,29 @@ def dz_load_session(uid):
 def dz_clear_session(uid):
     try:
         f = SESSIONS_DIR / f"dz_{uid}.json"
+        if f.exists(): f.unlink()
+    except: pass
+
+# ⭐ cooldown 2Go FREE — ملف منفصل لكل مستخدم
+def oo_free2gb_save(uid, msisdn):
+    try:
+        (SESSIONS_DIR / f"free2gb_{uid}.json").write_text(
+            json.dumps({"msisdn": msisdn, "last": time.time()}, ensure_ascii=False))
+    except: pass
+
+def oo_free2gb_get_last(uid, msisdn):
+    try:
+        f = SESSIONS_DIR / f"free2gb_{uid}.json"
+        if not f.exists(): return 0
+        d = json.loads(f.read_text())
+        if d.get("msisdn") == msisdn:
+            return d.get("last", 0)
+    except: pass
+    return 0
+
+def oo_free2gb_clear(uid):
+    try:
+        f = SESSIONS_DIR / f"free2gb_{uid}.json"
         if f.exists(): f.unlink()
     except: pass
 
@@ -1157,8 +1212,7 @@ async def dz_process(uid, phone, action):
         p = time.time() - last
         if p < COOLDOWN_6GB_DAILY:
             r = int(COOLDOWN_6GB_DAILY - p)
-            hh = r // 3600
-            mm = (r % 3600) // 60
+            hh = r // 3600; mm = (r % 3600) // 60
             await bot.send_message(uid,
                 f"❌ لم تكمل 24 ساعة بعد\n⏱️ متبقّي: {hh} س {mm} د",
                 reply_markup=back_btn("main_menu"))
@@ -1402,6 +1456,8 @@ async def _cb_inner(call):
 
     if call.data == "delete_my_number":
         user = oo_load(uid)
+    if call.data == "delete_my_number":
+        user = oo_load(uid)
         dz_row = db_query("SELECT phone FROM numbers WHERE user_id=? LIMIT 1", (uid,), fetch=True)
         saved = []
         if dz_row: saved.append(f"🔴 <code>{dz_mask(dz_row[0])}</code> (جيزي)")
@@ -1416,12 +1472,12 @@ async def _cb_inner(call):
 
     if call.data == "delete_my_number_ok":
         db_query("DELETE FROM numbers WHERE user_id=?", (uid,))
-        oo_clear(uid); dz_clear_session(uid)
+        oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
         await bot.send_message(uid, "✅ <b>تم الحذف</b>\n\n💡 أرسل رقمك من جديد", reply_markup=back_btn("main_menu"), parse_mode='HTML'); return
 
     if call.data == "change_phone":
-        oo_clear(uid); dz_clear_session(uid)
+        oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
         await send_welcome(uid); return
 
@@ -1559,7 +1615,7 @@ async def oo_cb_handler(call):
     data = call.data
     user = oo_load(uid)
     if data == "oo_change":
-        oo_clear(uid); dz_clear_session(uid)
+        oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
         await send_welcome(uid); return
     if data == "oo_back_menu":
@@ -1633,12 +1689,32 @@ async def oo_cb_handler(call):
             reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
         return
 
+    # ==================== 🎁 2Go FREE — مع cooldown 24 ساعة ====================
     if data == "oo_quick_free_2gb":
+        # 🔒 فحص cooldown
+        last = oo_free2gb_get_last(uid, ms)
+        elapsed = time.time() - last if last else 0
+        if last and elapsed < COOLDOWN_FREE_2GB_OO:
+            remaining = int(COOLDOWN_FREE_2GB_OO - elapsed)
+            hh = remaining // 3600
+            mmn = (remaining % 3600) // 60
+            await bot.send_message(uid,
+                f"⏰ <b>راك مفعّل من قبل</b>\n"
+                f"━━━━━━━━━━━━━━━━\n\n"
+                f"📱 <code>{o_mask(ms)}</code>\n"
+                f"🎁 <b>2 جيجا مجاني — 24H</b>\n\n"
+                f"⏳ <b>المتبقي:</b> {hh} س {mmn} د\n\n"
+                f"💡 رجع بعد انتهاء المدة",
+                reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
+            return
+
         await bot.send_message(uid, "⏳ <b>جاري تفعيل 2 جيجا المجاني...</b>\n\n⏱️ انتظر قليلاً", parse_mode='HTML')
         r = await asyncio.to_thread(oo_purchase_free_2gb, ms, at, meta)
         status = r.get("status", "error")
+
         if status == "ok":
             inc_stat("oo_free_2gb")
+            oo_free2gb_save(uid, ms)  # ⭐ نسجّل الوقت
             await notify_group_success("2Go مجاني — 24H", "Ooredoo 🟠")
             await send_result(uid,
                 f"🎉 <b>مبروك عليك!</b>\n━━━━━━━━━━━━━━━━\n\n"
@@ -1650,13 +1726,20 @@ async def oo_cb_handler(call):
             if uid == ADMIN_ID:
                 await bot.send_message(uid, f"<b>🔍 تفاصيل للأدمن:</b>\n<pre>{_html.escape(str(r.get('data',{}))[:1500])}</pre>", parse_mode='HTML')
             return
+
         if status == "already":
+            # نحسب الوقت المتبقي إذا كنا سجّلناه، وإلا نفترض 24 ساعة كاملة
+            oo_free2gb_save(uid, ms)
+            hh = COOLDOWN_FREE_2GB_OO // 3600
             await bot.send_message(uid,
                 f"⏰ <b>راك مفعّل من قبل</b>\n━━━━━━━━━━━━━━━━\n\n"
-                f"📱 <code>{o_mask(ms)}</code>\n🎁 <b>2 جيجا مجاني — 24H</b>\n\n"
-                f"⏳ انتظر <b>24 ساعة</b> وأعد المحاولة",
+                f"📱 <code>{o_mask(ms)}</code>\n"
+                f"🎁 <b>2 جيجا مجاني — 24H</b>\n\n"
+                f"⏳ <b>انتظر {hh} ساعة</b> وأعد المحاولة\n\n"
+                f"💡 اطلب <code>*200#</code> باش تتأكد",
                 reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
             return
+
         if status == "unauthorized":
             bal_check = await asyncio.to_thread(oo_check_balance, ms, at, meta)
             if bal_check.get("status") == "unauthorized":
@@ -1669,12 +1752,14 @@ async def oo_cb_handler(call):
             if uid == ADMIN_ID:
                 await bot.send_message(uid, f"<b>🔍 تفاصيل للأدمن:</b>\n<pre>{_html.escape(str(r.get('data',{}))[:1500])}</pre>", parse_mode='HTML')
             return
+
         if status == "not_allowed":
             await bot.send_message(uid, "🚫 <b>العرض غير متاح لرقمك</b>",
                 reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
             if uid == ADMIN_ID:
                 await bot.send_message(uid, f"<b>🔍 تفاصيل للأدمن:</b>\n<pre>{_html.escape(str(r.get('data',{}))[:1500])}</pre>", parse_mode='HTML')
             return
+
         await bot.send_message(uid, "❌ <b>فشل التفعيل</b>\n💡 حاول لاحقاً",
             reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
         if uid == ADMIN_ID:
@@ -1744,13 +1829,29 @@ async def _text_inner(message):
 
     if step.get("step") == "oo_await_otp":
         m = re.search(r"\b(\d{6})\b", text)
-        if not m: await bot.send_message(uid, "⚠️ 6 أرقام"); return
+        if not m:
+            await bot.send_message(uid, "⚠️ أرسل 6 أرقام فقط"); return
         otp = m.group(1); ms = step.get("msisdn"); device = step.get("device", {})
+
+        # ⭐ نعلم المستخدم أننا نتحقق (retry داخلي)
+        wait_msg = None
+        try:
+            wait_msg = await bot.send_message(uid, "🔍 جاري التحقق... انتظر ثوانٍ")
+        except: pass
+
         result = await asyncio.to_thread(ooredoo_verify_otp_sync, ms, otp, device)
+
+        if wait_msg:
+            try: await bot.delete_message(uid, wait_msg.message_id)
+            except: pass
+
         if result == "wrong_otp":
-            await bot.send_message(uid, "❌ الرمز خاطئ"); return
+            await bot.send_message(uid, "❌ الرمز خاطئ، جرّب مرة أخرى"); return
         if not result:
-            await bot.send_message(uid, "❌ فشل التحقق"); return
+            await bot.send_message(uid,
+                "❌ <b>فشل التحقق</b>\n\n"
+                "💡 تحقق من الرمز أو أعد الإرسال",
+                parse_mode='HTML'); return
         user = {"msisdn": ms, "device": device, **result}
         oo_save(uid, user)
         inc_stat("oo_logins")
@@ -1761,7 +1862,18 @@ async def _text_inner(message):
         if not text.isdigit() or len(text) != 6:
             await bot.send_message(uid, "❌ 6 أرقام"); return
         phone = step.get("phone")
+
+        wait_msg = None
+        try:
+            wait_msg = await bot.send_message(uid, "🔍 جاري التحقق... انتظر ثوانٍ")
+        except: pass
+
         token = await asyncio.to_thread(dj_verify_otp, phone, text)
+
+        if wait_msg:
+            try: await bot.delete_message(uid, wait_msg.message_id)
+            except: pass
+
         if token and token != "EXPIRED":
             db_query("INSERT OR REPLACE INTO numbers (phone,user_id,token,added_date) VALUES (?,?,?,?)",
                      (phone, uid, token, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
@@ -1770,7 +1882,10 @@ async def _text_inner(message):
             user_steps[uid] = {"step": "dz_menu", "last_activity": time.time()}
             await send_dz_menu(uid, phone)
         else:
-            await bot.send_message(uid, "❌ الرمز خاطئ")
+            await bot.send_message(uid,
+                "❌ <b>الرمز خاطئ</b>\n\n"
+                "💡 أعد المحاولة أو أرسل /start",
+                parse_mode='HTML')
         return
 
     if oo_load(uid):
@@ -1785,7 +1900,7 @@ async def _text_inner(message):
 # ==================== Main ====================
 async def main():
     print("=" * 60)
-    print("🤖 البوت الموحّد — جيزي + أوريدو + 6G مجاناً + 2Go FREE")
+    print("🤖 البوت الموحّد v2 — جيزي + أوريدو + 6G + 2Go FREE")
     print(f"👤 الأدمن: {ADMIN_ID}")
     print("=" * 60)
     saved = load_steps_saved()
