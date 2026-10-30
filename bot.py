@@ -462,12 +462,8 @@ def dj_extract_price(p):
     except: pass
     return None
 
-# ==================== 🎯 محول ردود Djezzy (الحقيقي) ====================
+# ==================== 🎯 محول ردود Djezzy ====================
 def _parse_activation_result(status_code, text_body, json_body):
-    """
-    تصنيف رد Djezzy بناءً على message الفعلي.
-    Returns: SUCCESS | LIMIT | FAILED | UNKNOWN | EXPIRED | NO_BALANCE | RATE_LIMIT | NOT_ALLOWED
-    """
     if status_code == 401: return "EXPIRED"
     if status_code == 402: return "NO_BALANCE"
     if status_code == 403: return "NOT_ALLOWED"
@@ -524,7 +520,7 @@ def _parse_activation_result(status_code, text_body, json_body):
 
     return "UNKNOWN"
 
-# ==================== 🎁 تفعيل 2 جيجا (حقيقي) ====================
+# ==================== 🎁 تفعيل 2 جيجا ====================
 def dj_activate_2gb(token, phone):
     h = DJ_HEADERS.copy()
     h['Authorization'] = f"Bearer {token}"
@@ -553,7 +549,7 @@ def dj_activate_2gb(token, phone):
             continue
     return "UNKNOWN"
 
-# ==================== 🎁 تفعيل 6 جيجا (حقيقي) ====================
+# ==================== 🎁 تفعيل 6 جيجا ====================
 def dj_activate_6gb_daily(token, phone):
     h = DJ_HEADERS.copy()
     h['Authorization'] = f"Bearer {token}"
@@ -1246,16 +1242,13 @@ async def dz_process(uid, phone, action):
         await _dz_request_new_otp(uid, phone); return
     token = row[0]
     
-    # ==================== 2 جيجا أسبوعي ====================
     if action == "2gb":
         last = db_query("SELECT last_activation_2gb FROM numbers WHERE phone=?", (phone,), fetch=True)[0] or 0
         p = time.time() - last
         if p < COOLDOWN_2GB:
             r = int(COOLDOWN_2GB - p); d = r // 86400; h = (r % 86400) // 3600
             await bot.send_message(uid, f"❌ لم تكمل أسبوع\n⏱️ {d} ي {h} س", reply_markup=back_btn("main_menu")); return
-        
         res = await asyncio.to_thread(dj_activate_2gb, token, phone)
-        
         if res == "SUCCESS":
             db_query("UPDATE numbers SET last_activation_2gb=? WHERE phone=?", (time.time(), phone))
             inc_stat("total_2gb")
@@ -1299,7 +1292,6 @@ async def dz_process(uid, phone, action):
                 reply_markup=back_btn("main_menu"))
         return
     
-    # ==================== 6 جيجا يومي ====================
     elif action == "6gb_daily":
         last = db_query("SELECT last_activation_6gb_daily FROM numbers WHERE phone=?",
                         (phone,), fetch=True)[0] or 0
@@ -1311,9 +1303,7 @@ async def dz_process(uid, phone, action):
                 f"❌ لم تكمل 24 ساعة بعد\n⏱️ متبقّي: {hh} س {mm} د",
                 reply_markup=back_btn("main_menu"))
             return
-        
         res = await asyncio.to_thread(dj_activate_6gb_daily, token, phone)
-        
         if res == "SUCCESS":
             db_query("UPDATE numbers SET last_activation_6gb_daily=? WHERE phone=?",
                      (time.time(), phone))
@@ -1452,6 +1442,7 @@ async def cmd_admin(message):
 # ==================== Start ====================
 @bot.message_handler(commands=['start'], chat_types=['private'])
 async def cmd_start(message):
+    _last_heartbeat[0] = time.time()   # ✅ heartbeat
     uid = message.from_user.id; now = time.time()
     await typing(message.chat.id)
     if not await check_subscription(uid):
@@ -1475,6 +1466,7 @@ async def cmd_start(message):
     call.message and call.message.chat and call.message.chat.type == 'private'
 ))
 async def cb_handler(call):
+    _last_heartbeat[0] = time.time()   # ✅ heartbeat
     try:
         await _cb_inner(call)
     except Exception as e:
@@ -1874,6 +1866,7 @@ async def oo_cb_handler(call):
 # ==================== TEXT HANDLER ====================
 @bot.message_handler(func=lambda m: True, content_types=['text'], chat_types=['private'])
 async def handle_text(message):
+    _last_heartbeat[0] = time.time()   # ✅ heartbeat
     try:
         await _text_inner(message)
     except Exception as e:
@@ -1996,10 +1989,6 @@ async def _text_inner(message):
 
 # ==================== Main (Robust — لا يتوقف أبداً) ====================
 _last_heartbeat = [time.time()]
-
-@bot.middleware_handler(update_types=['message', 'callback_query'])
-def _heartbeat_middleware(bot_instance, update):
-    _last_heartbeat[0] = time.time()
 
 def _install_global_handlers():
     try:
