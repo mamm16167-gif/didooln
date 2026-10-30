@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""البوت الموحّد v2 — جيزي 🔴 + أوريدو 🟠 + 6G مجاناً + 2Go FREE + 📋 سجل"""
+"""البوت الموحّد v2 — Robust + Oxylabs + تفعيل حقيقي"""
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -195,7 +195,6 @@ def format_logs_for_telegram(lines, title):
 
 STEPS_FILE = BASE_DIR / "user_steps.json"
 DB_PATH = str(BASE_DIR / "boykta.db")
-_PROFILE_CACHE = {}
 
 # ==================== Sessions ====================
 def _new_session(headers=None, use_proxy=True):
@@ -463,6 +462,127 @@ def dj_extract_price(p):
     except: pass
     return None
 
+# ==================== 🎯 محول ردود Djezzy (الحقيقي) ====================
+def _parse_activation_result(status_code, text_body, json_body):
+    """
+    تصنيف رد Djezzy بناءً على message الفعلي.
+    Returns: SUCCESS | LIMIT | FAILED | UNKNOWN | EXPIRED | NO_BALANCE | RATE_LIMIT | NOT_ALLOWED
+    """
+    if status_code == 401: return "EXPIRED"
+    if status_code == 402: return "NO_BALANCE"
+    if status_code == 403: return "NOT_ALLOWED"
+    if status_code == 409: return "LIMIT"
+    if status_code == 429: return "RATE_LIMIT"
+    if status_code not in (200, 201, 202):
+        return "FAILED"
+
+    message = ""
+    json_status = None
+    if isinstance(json_body, dict):
+        msg_val = json_body.get("message") or json_body.get("msg") or ""
+        if isinstance(msg_val, dict):
+            msg_val = msg_val.get("en") or msg_val.get("fr") or msg_val.get("ar") or str(msg_val)
+        message = str(msg_val).lower() if msg_val else ""
+        json_status = json_body.get("status")
+
+    body_lower = (text_body or "").lower()
+    combined = message + " " + body_lower
+
+    already_kw = (
+        "already", "déjà", "deja", "dèja",
+        "exist", "duplicate", "subscribed",
+        "مفعل", "مفعّل", "مسبق", "سابق", "من قبل"
+    )
+    if any(k in combined for k in already_kw):
+        return "LIMIT"
+
+    success_kw = (
+        "successfully activated", "activated successfully",
+        "product successfully activated",
+        "activation réussie", "activé avec succès",
+        "تم التفعيل بنجاح", "تم تفعيل بنجاح",
+    )
+    if any(k in combined for k in success_kw):
+        return "SUCCESS"
+
+    error_kw = (
+        "error", "failed", "failure", "invalid",
+        "not allowed", "not_eligible", "not eligible",
+        "insufficient", "refus", "impossible", "interdit",
+        "échec", "echoue", "خطأ", "فشل", "غير مسموح",
+        "unavailable", "indisponible"
+    )
+    if any(k in combined for k in error_kw):
+        return "FAILED"
+
+    if json_status is not None:
+        try:
+            if int(json_status) >= 400:
+                return "FAILED"
+        except:
+            pass
+
+    return "UNKNOWN"
+
+# ==================== 🎁 تفعيل 2 جيجا (حقيقي) ====================
+def dj_activate_2gb(token, phone):
+    h = DJ_HEADERS.copy()
+    h['Authorization'] = f"Bearer {token}"
+    h['User-Agent'] = "MobileApp/3.0.7"
+    endpoints = [
+        f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}",
+        f"{DJ_BASE}/api/v1/services/shake/{phone}",
+        f"{DJ_BASE}/api/v1/subscribers/activate-product/{phone}",
+    ]
+    for url in endpoints:
+        try:
+            r = _dz_req("POST", url, headers=h,
+                        json_body={"packageCode": "GIFTWALKWIN2GO"}, timeout=20)
+            if r is None: continue
+            try: j = r.json()
+            except: j = None
+            result = _parse_activation_result(r.status_code, r.text, j)
+            logging.info(f"[DJ-2GB] {phone} {url.split('/')[-2]} → HTTP {r.status_code} | {result} | {str(r.text)[:200]}")
+            if result == "SUCCESS": return "SUCCESS"
+            if result == "LIMIT":   return "LIMIT"
+            if result in ("EXPIRED", "NO_BALANCE", "RATE_LIMIT", "NOT_ALLOWED"):
+                return result
+            time.sleep(0.3)
+        except Exception as e:
+            logging.warning(f"[DJ-2GB] {phone} {url[:50]}: {e}")
+            continue
+    return "UNKNOWN"
+
+# ==================== 🎁 تفعيل 6 جيجا (حقيقي) ====================
+def dj_activate_6gb_daily(token, phone):
+    h = DJ_HEADERS.copy()
+    h['Authorization'] = f"Bearer {token}"
+    h['User-Agent'] = "MobileApp/3.0.9"
+    endpoints = [
+        f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}",
+        f"{DJ_BASE}/api/v1/services/shake/{phone}",
+        f"{DJ_BASE}/api/v1/subscribers/activate-product/{phone}",
+    ]
+    for url in endpoints:
+        try:
+            r = _dz_req("POST", url, headers=h,
+                        json_body={"packageCode": "GIFTWALKWIN6GDAY"}, timeout=20)
+            if r is None: continue
+            try: j = r.json()
+            except: j = None
+            result = _parse_activation_result(r.status_code, r.text, j)
+            logging.info(f"[DJ-6GB] {phone} {url.split('/')[-2]} → HTTP {r.status_code} | {result} | {str(r.text)[:200]}")
+            if result == "SUCCESS": return "SUCCESS"
+            if result == "LIMIT":   return "LIMIT"
+            if result in ("EXPIRED", "NO_BALANCE", "RATE_LIMIT", "NOT_ALLOWED"):
+                return result
+            time.sleep(0.3)
+        except Exception as e:
+            logging.warning(f"[DJ-6GB] {phone} {url[:50]}: {e}")
+            continue
+    return "UNKNOWN"
+
+# ==================== عروض مدفوعة ====================
 async def dz_activate_paid_offer_async(token, phone, package_code, offer_type, offer_name, price):
     h = DZ_HEADERS.copy(); h['Authorization'] = f"Bearer {token}"
     async def _try_post(url, label):
@@ -537,59 +657,6 @@ async def dz_activate_offer_90_5g_async(token, phone):
         fb = await _try_post(f"{DZ_BASE_URL}/api/v1/subscribers/activate-product/{phone}", "fb")
         if fb.get("success") or fb.get("token_expired"): return fb
     return r_post
-
-def dj_activate_2gb(token, phone):
-    h = DJ_HEADERS.copy(); h['Authorization'] = f"Bearer {token}"; h['User-Agent'] = "MobileApp/3.0.7"
-    endpoints = [f"{DJ_BASE}/api/v1/services/shake/{phone}",
-                 f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}",
-                 f"{DJ_BASE}/api/v1/subscribers/activate-product/{phone}"]
-    last_code = 0
-    for url in endpoints:
-        r = _dz_req("POST", url, headers=h, json_body={"packageCode": "GIFTWALKWIN2GO"}, timeout=20)
-        if r is None: continue
-        last_code = r.status_code
-        if r.status_code == 401: return "EXPIRED"
-        if r.status_code in (200, 201):
-            try: body = r.text.lower()
-            except: body = ""
-            if "already" in body: return "LIMIT"
-            return "SUCCESS"
-        if r.status_code == 402: return "NO_BALANCE"
-        if r.status_code == 429: return "RATE_LIMIT"
-        time.sleep(0.3)
-    if last_code == 403: return "NOT_ALLOWED"
-    return "FAILED"
-
-def dj_activate_6gb_daily(token, phone):
-    h = DJ_HEADERS.copy()
-    h['Authorization'] = f"Bearer {token}"
-    h['User-Agent'] = "MobileApp/3.0.9"
-    endpoints = [
-        f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}",
-        f"{DJ_BASE}/api/v1/services/shake/{phone}",
-        f"{DJ_BASE}/api/v1/subscribers/activate-product/{phone}",
-    ]
-    last_code = 0
-    for url in endpoints:
-        try:
-            r = _dz_req("POST", url, headers=h,
-                        json_body={"packageCode": "GIFTWALKWIN6GDAY"}, timeout=20)
-            if r is None: continue
-            last_code = r.status_code
-            if r.status_code == 401: return "EXPIRED"
-            if r.status_code in (200, 201):
-                try: body = r.text.lower()
-                except: body = ""
-                if "already" in body: return "LIMIT"
-                return "SUCCESS"
-            if r.status_code == 402: return "NO_BALANCE"
-            if r.status_code == 429: return "RATE_LIMIT"
-            time.sleep(0.3)
-        except Exception as e:
-            logging.warning(f"[DJ-6GB] {url[:60]}: {e}")
-            continue
-    if last_code == 403: return "NOT_ALLOWED"
-    return "FAILED"
 
 # ==================== أوريدو ====================
 def _now_ms(): return str(int(time.time() * 1000))
@@ -1178,24 +1245,61 @@ async def dz_process(uid, phone, action):
     if not row or row[0] == "EXPIRED":
         await _dz_request_new_otp(uid, phone); return
     token = row[0]
+    
+    # ==================== 2 جيجا أسبوعي ====================
     if action == "2gb":
         last = db_query("SELECT last_activation_2gb FROM numbers WHERE phone=?", (phone,), fetch=True)[0] or 0
         p = time.time() - last
         if p < COOLDOWN_2GB:
             r = int(COOLDOWN_2GB - p); d = r // 86400; h = (r % 86400) // 3600
             await bot.send_message(uid, f"❌ لم تكمل أسبوع\n⏱️ {d} ي {h} س", reply_markup=back_btn("main_menu")); return
+        
         res = await asyncio.to_thread(dj_activate_2gb, token, phone)
+        
         if res == "SUCCESS":
             db_query("UPDATE numbers SET last_activation_2gb=? WHERE phone=?", (time.time(), phone))
             inc_stat("total_2gb")
             await notify_group_success("2GB أسبوعي", "Djezzy 🔴")
-            await send_result(uid, f"✅ <b>تم التفعيل بنجاح</b> 🎉\n\n📱 <code>{dz_mask(phone)}</code>\n🎁 2 جيجا", "main_menu")
+            await send_result(uid,
+                f"✅ <b>تم التفعيل بنجاح</b> 🎉\n\n"
+                f"📱 <code>{dz_mask(phone)}</code>\n"
+                f"🎁 <b>2 جيجا</b> — أسبوع\n\n"
+                f"💡 اطلب <code>*200#</code> باش تتأكد",
+                "main_menu")
         elif res == "EXPIRED":
             db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (phone,))
             await _dz_request_new_otp(uid, phone); return
+        elif res == "LIMIT":
+            await bot.send_message(uid,
+                "⏰ <b>راك مفعّل 2 جيجا من قبل</b>\n\n"
+                "🎁 العرض: 2 جيجا — أسبوع\n\n"
+                "💡 ما تقدرش تفعّلو مرتين، انتظر يخلص العرض\n"
+                "📞 اطلب <code>*200#</code> باش تتأكد من الباقة",
+                reply_markup=back_btn("main_menu"), parse_mode='HTML')
+        elif res == "UNKNOWN":
+            await bot.send_message(uid,
+                "⚠️ <b>تعذر التأكد من التفعيل</b>\n\n"
+                "🎁 العرض: 2 جيجا — أسبوع\n\n"
+                "💡 <b>باش تتأكد:</b>\n"
+                "📞 اطلب <code>*200#</code>\n\n"
+                "📌 اذا ظهرت 2 جيجا → التفعيل نجح ✅\n"
+                "📌 اذا ما ظهرتش → أعد المحاولة بعد قليل",
+                reply_markup=back_btn("main_menu"), parse_mode='HTML')
+        elif res == "NO_BALANCE":
+            await bot.send_message(uid, "❌ رصيد غير كافي (يلزم رصيد رمزي)",
+                reply_markup=back_btn("main_menu"))
+        elif res == "RATE_LIMIT":
+            await bot.send_message(uid, "🚫 تجاوزت الحد المسموح، جرّب بعد دقائق",
+                reply_markup=back_btn("main_menu"))
+        elif res == "NOT_ALLOWED":
+            await bot.send_message(uid, "🚫 العرض غير متاح لرقمك",
+                reply_markup=back_btn("main_menu"))
         else:
-            await bot.send_message(uid, f"❌ فشل التفعيل ({res})", reply_markup=back_btn("main_menu"))
+            await bot.send_message(uid, f"❌ فشل التفعيل ({res})",
+                reply_markup=back_btn("main_menu"))
         return
+    
+    # ==================== 6 جيجا يومي ====================
     elif action == "6gb_daily":
         last = db_query("SELECT last_activation_6gb_daily FROM numbers WHERE phone=?",
                         (phone,), fetch=True)[0] or 0
@@ -1207,7 +1311,9 @@ async def dz_process(uid, phone, action):
                 f"❌ لم تكمل 24 ساعة بعد\n⏱️ متبقّي: {hh} س {mm} د",
                 reply_markup=back_btn("main_menu"))
             return
+        
         res = await asyncio.to_thread(dj_activate_6gb_daily, token, phone)
+        
         if res == "SUCCESS":
             db_query("UPDATE numbers SET last_activation_6gb_daily=? WHERE phone=?",
                      (time.time(), phone))
@@ -1217,20 +1323,36 @@ async def dz_process(uid, phone, action):
                 f"✅ <b>تم التفعيل بنجاح</b> 🎉\n\n"
                 f"📱 <code>{dz_mask(phone)}</code>\n"
                 f"🎁 <b>6 جيجا</b> — 24 ساعة\n"
-                f"💰 <b>مجاناً 100%</b>",
+                f"💰 <b>مجاناً 100%</b>\n\n"
+                f"💡 اطلب <code>*200#</code> باش تتأكد",
                 "main_menu")
         elif res == "EXPIRED":
             db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (phone,))
             await _dz_request_new_otp(uid, phone); return
         elif res == "LIMIT":
             await bot.send_message(uid,
-                "⏰ <b>راك مفعّل من قبل</b>\n\n🎁 6 جيجا — 24h\n💡 انتظر انتهاء المدة",
+                "⏰ <b>راك مفعّل 6 جيجا من قبل</b>\n\n"
+                "🎁 العرض: 6 جيجا — 24h\n\n"
+                "💡 ما تقدرش تفعّلو مرتين، انتظر يخلص العرض\n"
+                "📞 اطلب <code>*200#</code> باش تتأكد من الباقة",
+                reply_markup=back_btn("main_menu"), parse_mode='HTML')
+        elif res == "UNKNOWN":
+            await bot.send_message(uid,
+                "⚠️ <b>تعذر التأكد من التفعيل</b>\n\n"
+                "🎁 العرض: 6 جيجا — 24h\n\n"
+                "💡 <b>باش تتأكد:</b>\n"
+                "📞 اطلب <code>*200#</code>\n\n"
+                "📌 اذا ظهرت 6 جيجا → التفعيل نجح ✅\n"
+                "📌 اذا ما ظهرتش → أعد المحاولة بعد قليل",
                 reply_markup=back_btn("main_menu"), parse_mode='HTML')
         elif res == "NO_BALANCE":
             await bot.send_message(uid, "❌ رصيد غير كافي (يلزم رصيد رمزي)",
                 reply_markup=back_btn("main_menu"))
         elif res == "RATE_LIMIT":
             await bot.send_message(uid, "🚫 تجاوزت الحد المسموح، جرّب بعد دقائق",
+                reply_markup=back_btn("main_menu"))
+        elif res == "NOT_ALLOWED":
+            await bot.send_message(uid, "🚫 العرض غير متاح لرقمك",
                 reply_markup=back_btn("main_menu"))
         else:
             await bot.send_message(uid, f"❌ فشل التفعيل ({res})",
@@ -1348,7 +1470,7 @@ async def cmd_start(message):
     user_steps[uid] = {"step": "await_phone", "last_activity": now}
     await send_welcome(message.chat.id)
 
-# ==================== Callback Handler (محمي) ====================
+# ==================== Callback Handler ====================
 @bot.callback_query_handler(func=lambda call: (
     call.message and call.message.chat and call.message.chat.type == 'private'
 ))
@@ -1407,7 +1529,6 @@ async def _cb_inner(call):
     if uid in user_steps and isinstance(user_steps[uid], dict):
         user_steps[uid]["last_activity"] = time.time()
 
-    # ==================== Admin Log Panel ====================
     if call.data == "admin_menu":
         if uid != ADMIN_ID: return
         await bot.send_message(uid, "🛠️ <b>لوحة الأدمن</b>", reply_markup=admin_menu_markup(), parse_mode='HTML')
@@ -1444,7 +1565,6 @@ async def _cb_inner(call):
         else: await bot.send_message(uid, "❌ لم تشترك!", reply_markup=subscription_markup())
         return
 
-    # ==================== ✅ delete_my_number (تم إصلاح الـ Indentation) ====================
     if call.data == "delete_my_number":
         user = oo_load(uid)
         dz_row = db_query("SELECT phone FROM numbers WHERE user_id=? LIMIT 1", (uid,), fetch=True)
@@ -1473,7 +1593,6 @@ async def _cb_inner(call):
     if call.data.startswith("oo_"):
         await oo_cb_handler(call); return
 
-    # ==================== DZ ====================
     if call.data == "quick_offer_70_4g":
         nums = db_query("SELECT phone FROM numbers WHERE user_id=? ORDER BY added_date DESC LIMIT 1", (uid,), fetchall=True)
         if not nums: await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu")); return
@@ -1752,7 +1871,7 @@ async def oo_cb_handler(call):
             await bot.send_message(uid, f"<b>🔍 تفاصيل للأدمن:</b>\ncode={r.get('code')}\n<pre>{_html.escape(str(r.get('data',{}))[:1500])}</pre>", parse_mode='HTML')
         return
 
-# ==================== TEXT HANDLER (محمي) ====================
+# ==================== TEXT HANDLER ====================
 @bot.message_handler(func=lambda m: True, content_types=['text'], chat_types=['private'])
 async def handle_text(message):
     try:
@@ -1875,26 +1994,118 @@ async def _text_inner(message):
     user_steps[uid] = {"step": "await_phone", "last_activity": now}
     await send_welcome(uid)
 
-# ==================== Main ====================
+# ==================== Main (Robust — لا يتوقف أبداً) ====================
+_last_heartbeat = [time.time()]
+
+@bot.middleware_handler(update_types=['message', 'callback_query'])
+def _heartbeat_middleware(bot_instance, update):
+    _last_heartbeat[0] = time.time()
+
+def _install_global_handlers():
+    try:
+        loop = asyncio.get_running_loop()
+        def _ex_handler(_loop, context):
+            exc = context.get("exception")
+            if exc:
+                logging.error(f"[GLOBAL-LOOP-ERR] {type(exc).__name__}: {exc}")
+            else:
+                logging.error(f"[GLOBAL-LOOP-ERR] {context.get('message')}")
+        loop.set_exception_handler(_ex_handler)
+    except Exception as e:
+        logging.error(f"[GLOBAL-HANDLERS] {e}")
+
+async def _run_polling_once():
+    try:
+        await bot.remove_webhook()
+    except Exception as e:
+        logging.warning(f"[POLL] remove_webhook: {e}")
+    logging.warning("[POLL] ▶️ infinity_polling starting...")
+    poll_kwargs = dict(
+        skip_pending=True,
+        timeout=30,
+        long_polling_timeout=25,
+        restart_on_change=False,
+        logger_level=logging.WARNING,
+    )
+    try:
+        await bot.infinity_polling(non_stop=True, **poll_kwargs)
+    except TypeError:
+        await bot.infinity_polling(**poll_kwargs)
+    logging.warning("[POLL] ⚠️ infinity_polling returned unexpectedly")
+
+async def _polling_supervisor():
+    RESTART_TIMEOUT = 60 * 60
+    STUCK_THRESHOLD = 60 * 15
+    while not _stop_threads.is_set():
+        _last_heartbeat[0] = time.time()
+        task = asyncio.create_task(_run_polling_once())
+        started = time.time()
+        try:
+            while not task.done() and not _stop_threads.is_set():
+                await asyncio.sleep(30)
+                now = time.time()
+                if now - started > RESTART_TIMEOUT:
+                    logging.warning(f"[SUPERVISOR] ⏰ {RESTART_TIMEOUT}s reached — proactive restart")
+                    break
+                if now - _last_heartbeat[0] > STUCK_THRESHOLD:
+                    logging.warning(f"[SUPERVISOR] 🚨 No updates for {int(now-_last_heartbeat[0])}s — checking API...")
+                    try:
+                        await asyncio.wait_for(bot.get_me(), timeout=15)
+                        logging.warning("[SUPERVISOR] ✅ API OK — resetting heartbeat")
+                        _last_heartbeat[0] = time.time()
+                    except Exception as e:
+                        logging.error(f"[SUPERVISOR] ❌ API dead ({e}) — restarting polling")
+                        break
+            if not task.done():
+                task.cancel()
+                try:
+                    await asyncio.wait_for(task, timeout=10)
+                except Exception:
+                    pass
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        except Exception as e:
+            logging.error(f"[SUPERVISOR] {type(e).__name__}: {e}", exc_info=True)
+            task.cancel()
+            try: await task
+            except Exception: pass
+        if not _stop_threads.is_set():
+            await asyncio.sleep(3)
+
 async def main():
     print("=" * 60)
-    print("🤖 البوت الموحّد v2 — جيزي + أوريدو + 6G + 2Go FREE")
+    print("🤖 البوت الموحّد v2 — Robust + Oxylabs + تفعيل حقيقي")
     print(f"👤 الأدمن: {ADMIN_ID}")
     print("=" * 60)
-    saved = load_steps_saved()
-    user_steps.update(saved)
-    threading.Thread(target=oo_auto_refresh, daemon=True).start()
-    threading.Thread(target=dz_auto_refresh, daemon=True).start()
-    threading.Thread(target=steps_saver_worker, daemon=True).start()
-    threading.Thread(target=reset_steps_worker, daemon=True).start()
-    threading.Thread(target=_proxy_proactive_rotate, daemon=True).start()
+    _install_global_handlers()
+    user_steps.update(load_steps_saved())
+    for fn in (oo_auto_refresh, dz_auto_refresh, steps_saver_worker,
+               reset_steps_worker, _proxy_proactive_rotate):
+        threading.Thread(target=fn, daemon=True, name=fn.__name__).start()
     print("✅ البوت يعمل...")
-    await bot.infinity_polling(skip_pending=True, timeout=30)
+    while not _stop_threads.is_set():
+        try:
+            await _polling_supervisor()
+        except Exception as e:
+            logging.error(f"[MAIN] {type(e).__name__}: {e}", exc_info=True)
+        if not _stop_threads.is_set():
+            await asyncio.sleep(5)
+
+def _run_forever():
+    while True:
+        try:
+            asyncio.run(main())
+        except KeyboardInterrupt:
+            logging.warning("[RUN] ⚠️ Ctrl+C — restart in 2s...")
+            try: save_steps()
+            except: pass
+            time.sleep(2)
+        except Exception as e:
+            logging.error(f"[RUN] ❌ asyncio.run crashed: {type(e).__name__}: {e}", exc_info=True)
+            try: save_steps()
+            except: pass
+            time.sleep(5)
 
 if __name__ == "__main__":
-    try:
-        asyncio.run(main())
-    except KeyboardInterrupt:
-        _stop_threads.set(); save_steps()
-    except Exception as e:
-        print(f"❌ {e}"); save_steps()
+    _run_forever()
