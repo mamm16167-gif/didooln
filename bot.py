@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""البوت الموحّد v2 — Robust + Oxylabs + تفعيل 2GB/6GB (الأصل)"""
+"""البوت الموحّد v3 — Robust + Oxylabs + 72GB Auto"""
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -51,8 +51,6 @@ DJ_BASE = "https://apim.djezzy.dz/mobile-api"
 DJ_HEADERS = {'User-Agent': "MobileApp/3.0.0", 'Accept': "application/json",
               'Content-Type': "application/json", 'accept-language': "fr", 'Connection': 'keep-alive'}
 COOLDOWN_2GB = 604800
-COOLDOWN_3GB = 604800
-COOLDOWN_6GB_DAILY = 86400
 COOLDOWN_FREE_2GB_OO = 86400
 OTP_RESEND_COOLDOWN = 60
 OTP_VERIFY_MIN_WAIT = 3
@@ -65,11 +63,8 @@ OO_BFF = "https://apis.ooredoo.dz/api/ooredoo-bff"
 OO_AUTH = "https://apis.ooredoo.dz/api/auth/realms/myooredoo/protocol/openid-connect/token"
 OO_CLIENT = "myooredoo-app"
 X_VERSION = "1.5.15"
-X_VERSION_PURCHASE = "1.5.16"
 X_VERSION_OTP = "1.5.16"
 X_SIG = "5c7641dbb82cf11066df68afc91541c967640106a95192740b43d51a5ce6777a"
-X_VERSION_FREE = "1.5.17"
-X_SIG_FREE = "c66054ba6166fe08d1a6a702fb10b151102a6f4ef058fcf3d995ee511ff0d267"
 NOTIFY_GROUP = "@ifoekdjdh"
 
 # ==================== نظام البروكسي (Oxylabs Residential) ====================
@@ -313,6 +308,7 @@ def dz_extract_msg(j):
 bot = AsyncTeleBot(TOKEN)
 user_steps = {}
 _last_otp_sent = {}
+MAIN_EVENT_LOOP = None
 
 # ==================== DB ====================
 def init_db():
@@ -329,12 +325,10 @@ def init_db():
                  (phone TEXT PRIMARY KEY, user_id INTEGER, token TEXT,
                   last_activation_2gb REAL DEFAULT 0,
                   last_activation_3gb REAL DEFAULT 0,
-                  last_activation_6gb_daily REAL DEFAULT 0,
                   last_activation_offers REAL DEFAULT 0, added_date TEXT)''')
     needed = {'user_id': 'INTEGER', 'token': 'TEXT',
               'last_activation_2gb': 'REAL DEFAULT 0',
               'last_activation_3gb': 'REAL DEFAULT 0',
-              'last_activation_6gb_daily': 'REAL DEFAULT 0',
               'last_activation_offers': 'REAL DEFAULT 0', 'added_date': 'TEXT'}
     existing_nums = [r[1] for r in c.execute("PRAGMA table_info(numbers)").fetchall()]
     for col, col_type in needed.items():
@@ -344,9 +338,9 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS stats (id INTEGER PRIMARY KEY)''')
     if c.execute("SELECT COUNT(*) FROM stats WHERE id = 1").fetchone()[0] == 0:
         c.execute("INSERT INTO stats (id) VALUES (1)")
-    all_cols = ["total_2gb","total_3gb","total_6gb_daily","total_offers","oo_logins","oo_snap","oo_spins",
+    all_cols = ["total_2gb","total_3gb","total_offers","oo_logins","oo_snap","oo_spins",
                 "oo_balance","oo_offers_view","dz_logins","oo_soccer_enrolls","oo_20dzd_1go",
-                "oo_gift_plays","oo_gift_won","oo_gifts_total","oo_free_2gb","oo_bundles"]
+                "oo_gift_plays","oo_gift_won","oo_gifts_total","oo_free_2gb","oo_bundles", "oo_72gb"]
     existing = [r[1] for r in c.execute("PRAGMA table_info(stats)").fetchall()]
     for col in all_cols:
         if col not in existing:
@@ -404,7 +398,6 @@ def dj_request_otp(phone):
         h = DJ_HEADERS.copy(); h['User-Agent'] = ua
         r = _dz_req("POST", url, headers=h, params=params, json_body=payload, timeout=15)
         if r is None: time.sleep(0.5); continue
-        logging.info(f"[DJ-OTP] {phone} UA={ua} → {r.status_code}")
         if r.status_code == 200: return True
         if r.status_code in (429, 400): return False
         time.sleep(0.5)
@@ -422,17 +415,13 @@ def dj_verify_otp(phone, otp):
         if attempt > 0:
             time.sleep(OTP_VERIFY_MIN_WAIT)
         r = _dz_req("POST", url, headers=h, data=payload, timeout=25)
-        if r is None:
-            continue
+        if r is None: continue
         last_status = r.status_code
-        logging.info(f"[DJ-VERIFY] {phone} attempt {attempt+1} → {r.status_code}")
         if r.status_code == 200:
             try: return r.json().get('access_token')
             except: return None
-        if r.status_code == 429:
-            return None
-    if last_status == 401:
-        return "EXPIRED"
+        if r.status_code == 429: return None
+    if last_status == 401: return "EXPIRED"
     return None
 
 def dj_check_balance(token, phone):
@@ -443,7 +432,6 @@ def dj_check_balance(token, phone):
     for attempt in range(2):
         r = _dz_req("GET", url, headers=h, timeout=15)
         if r is None: continue
-        logging.info(f"[DJ-BAL] {phone} try {attempt+1} → {r.status_code}")
         if r.status_code == 200:
             try:
                 data = r.json().get("data", r.json())
@@ -462,7 +450,6 @@ def dj_extract_price(p):
     except: pass
     return None
 
-# ==================== 🎁 تفعيل 2 جيجا (الأصل) ====================
 def dj_activate_2gb(token, phone):
     h = DJ_HEADERS.copy()
     h['Authorization'] = f"Bearer {token}"
@@ -490,39 +477,6 @@ def dj_activate_2gb(token, phone):
     if last_code == 403: return "NOT_ALLOWED"
     return "FAILED"
 
-# ==================== 🎁 تفعيل 6 جيجا (الأصل) ====================
-def dj_activate_6gb_daily(token, phone):
-    h = DJ_HEADERS.copy()
-    h['Authorization'] = f"Bearer {token}"
-    h['User-Agent'] = "MobileApp/3.0.9"
-    endpoints = [
-        f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}",
-        f"{DJ_BASE}/api/v1/services/shake/{phone}",
-        f"{DJ_BASE}/api/v1/subscribers/activate-product/{phone}",
-    ]
-    last_code = 0
-    for url in endpoints:
-        try:
-            r = _dz_req("POST", url, headers=h,
-                        json_body={"packageCode": "GIFTWALKWIN6GDAY"}, timeout=20)
-            if r is None: continue
-            last_code = r.status_code
-            if r.status_code == 401: return "EXPIRED"
-            if r.status_code in (200, 201):
-                try: body = r.text.lower()
-                except: body = ""
-                if "already" in body: return "LIMIT"
-                return "SUCCESS"
-            if r.status_code == 402: return "NO_BALANCE"
-            if r.status_code == 429: return "RATE_LIMIT"
-            time.sleep(0.3)
-        except Exception as e:
-            logging.warning(f"[DJ-6GB] {url[:60]}: {e}")
-            continue
-    if last_code == 403: return "NOT_ALLOWED"
-    return "FAILED"
-
-# ==================== عروض مدفوعة ====================
 async def dz_activate_paid_offer_async(token, phone, package_code, offer_type, offer_name, price):
     h = DZ_HEADERS.copy(); h['Authorization'] = f"Bearer {token}"
     async def _try_post(url, label):
@@ -675,12 +629,10 @@ def ooredoo_send_otp_sync(msisdn):
         if chronos: h4["x-chronos-id"] = chronos
         body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}"
         c4, _, _ = _oo_req("POST", OO_AUTH, h4, body, timeout=30)
-        logging.info(f"[OO-OTP] {msisdn} → {c4}")
         if c4 == 429: return {"device": device, "otp_sent": False, "status": 429, "reason": "rate_limit"}
         if c4 == 0: return {"device": device, "otp_sent": False, "status": 0, "reason": "network"}
         return {"device": device, "otp_sent": True, "status": c4}
     except Exception as e:
-        logging.error(f"❌ OOREDOO OTP: {e}")
         return {"device": device, "otp_sent": False, "status": -1, "reason": "exception"}
 
 def ooredoo_verify_otp_sync(msisdn, otp, device):
@@ -719,7 +671,6 @@ def ooredoo_verify_otp_sync(msisdn, otp, device):
         try:
             c7, j7 = _one_attempt()
             last_status = c7
-            logging.info(f"[OO-VERIFY] {msisdn} attempt {attempt+1} → {c7}")
             if c7 == 200 and isinstance(j7, dict) and "access_token" in j7:
                 at = j7["access_token"]
                 return {"access_token": at, "refresh_token": j7.get("refresh_token",""),
@@ -729,7 +680,6 @@ def ooredoo_verify_otp_sync(msisdn, otp, device):
             if c7 == 429:
                 return None
         except Exception as e:
-            logging.error(f"[OO-VERIFY] attempt {attempt+1}: {e}")
             continue
     if last_status in (400, 401, 403):
         return "wrong_otp"
@@ -813,7 +763,6 @@ def oo_purchase_20dzd_1go(msisdn, at, meta):
     for label, h in [("mobile v1.5.16", _mobile_hdrs("1.5.16")),
                      ("mobile v1.5.15", _mobile_hdrs("1.5.15"))]:
         c, _, resp = _do("POST", f"{OO_BFF}/cvm/bundlePurchase", h, body, 30)
-        logging.info(f"[OO-20DZD-1GO] {msisdn} [{label}] → {c} | {str(resp)[:180]}")
         if c in (200, 201): return {"status": "ok", "data": resp}
         if c in (402, 409): break
     if c in (402, 409):
@@ -824,6 +773,34 @@ def oo_purchase_20dzd_1go(msisdn, at, meta):
         return {"status": "no_balance"}
     if c == 401: return {"status": "purchase_blocked"}
     return {"status": "error", "code": c}
+
+# ==================== 🎁 72GB Gamification ====================
+def oo_check_72gb_status(msisdn, at, meta):
+    h = _web_hdrs(msisdn, at, meta)
+    h["x-version"] = "1.5.17"
+    url = f"{OO_BFF}/gamification/status"
+    c, _, resp = _oo_req("GET", url, h, timeout=15)
+    if c == 200 and isinstance(resp, dict):
+        return {"status": "ok", "data": resp}
+    if c == 401: 
+        return {"status": "unauthorized"}
+    return {"status": "error", "code": c}
+
+def oo_claim_72gb(msisdn, at, meta):
+    h = _web_hdrs(msisdn, at, meta, "application/json; charset=utf-8")
+    h["x-version"] = "1.5.17"
+    endpoints = [
+        f"{OO_BFF}/gamification/play",
+        f"{OO_BFF}/gamification/claim",
+        f"{OO_BFF}/gamification/reward",
+        f"{OO_BFF}/gamification/play-and-win"
+    ]
+    body = json.dumps({})
+    for url in endpoints:
+        c, _, resp = _oo_req("POST", url, h, body, timeout=15)
+        if c in (200, 201):
+            return {"status": "ok", "data": resp, "endpoint": url}
+    return {"status": "error"}
 
 def oo_purchase_free_2gb(msisdn, at, meta):
     body_simple = json.dumps({"bundleCode": "BTL_24H_DATA_Free_2Go"}, separators=(",", ":"))
@@ -838,10 +815,8 @@ def oo_purchase_free_2gb(msisdn, at, meta):
         try:
             h = _web_hdrs(msisdn, at, meta, "application/json; charset=utf-8")
             c, _, resp = _oo_req("POST", url, h, body, timeout=30, use_proxy=True)
-            logging.info(f"[OO-FREE-2GB][{label}] {msisdn} → {c} | {str(resp)[:250]}")
             return c, resp
         except Exception as e:
-            logging.error(f"[OO-FREE-2GB][{label}] {msisdn}: {e}")
             return 0, {"_error": str(e)[:100]}
     already_seen = None
     for round_idx in range(2):
@@ -985,6 +960,39 @@ def _proxy_proactive_rotate():
             _rotate_proxy_session(force=True)
         except: pass
 
+def oo_auto_claim_72gb_worker():
+    while not _stop_threads.is_set():
+        try:
+            time.sleep(300)
+            for f in list(SESSIONS_DIR.glob("oo_*.json")):
+                try:
+                    uid_s = f.stem.replace("oo_", "")
+                    if not uid_s.isdigit(): continue
+                    uid = int(uid_s)
+                    u = oo_load(uid)
+                    if not u or not u.get("access_token"): continue
+                    ms = u["msisdn"]; at = u["access_token"]
+                    meta = {k: u.get(k, "") for k in ["tok_instance_id","tok_plat_sig","tok_fingerprint","tok_timestamp"]}
+                    
+                    r = oo_check_72gb_status(ms, at, meta)
+                    if r.get("status") == "ok":
+                        d = r.get("data", {})
+                        played = d.get("played", True)
+                        enable = d.get("gameUIEnable", False)
+                        if enable and not played:
+                            logging.info(f"[AUTO-72GB] Trying to claim for {ms}...")
+                            claim = oo_claim_72gb(ms, at, meta)
+                            if claim.get("status") == "ok":
+                                inc_stat("oo_72gb")
+                                logging.info(f"[AUTO-72GB] SUCCESS for {ms} via {claim.get('endpoint')}")
+                                if MAIN_EVENT_LOOP:
+                                    asyncio.run_coroutine_threadsafe(
+                                        bot.send_message(uid, "🎉 <b>مبروك!</b>\n\n✅ تم تفعيل عرض 72 جيجا أوتوماتيكياً في الخلفية لرقمك!\n\n💡 اطلب <code>*200#</code> باش تتأكد.", parse_mode='HTML'),
+                                        MAIN_EVENT_LOOP
+                                    )
+                except: pass
+        except: pass
+
 # ==================== نصوص ====================
 WELCOME_HEADER = ("مرحبا بك في موح بوت 👋\n\n"
     "بوت موح يقدم تفعيل عروض انترنت في مختلف الشبكات الجزائرية 🇩🇿\n\n"
@@ -1069,7 +1077,6 @@ AVAILABLE_OFFERS = {
 def main_menu_markup(user_id=None):
     m = InlineKeyboardMarkup(row_width=1)
     m.add(InlineKeyboardButton("🎉 تفعيل 2 جيجا (أسبوعي)", callback_data="activate_2gb"))
-    m.add(InlineKeyboardButton("🎁 6 جيجا 24h مجاناً", callback_data="activate_6gb_daily"))
     m.add(InlineKeyboardButton("🐷 كم هو رصيدي؟", callback_data="check_balance"))
     m.add(InlineKeyboardButton("🌐 عروض الإنترنت", callback_data="show_all_offers"))
     m.add(InlineKeyboardButton("💳 70 دج - 4GB", callback_data="quick_offer_70_4g"))
@@ -1098,10 +1105,10 @@ def confirm_offer_markup(oc, ph):
     return m
 
 def get_stats_text():
-    s = db_query("""SELECT total_2gb,total_3gb,total_6gb_daily,total_offers,
+    s = db_query("""SELECT total_2gb,total_3gb,total_offers,
                     oo_logins,oo_snap,oo_spins,oo_balance,dz_logins,
                     oo_soccer_enrolls,oo_20dzd_1go,oo_gift_plays,
-                    oo_gift_won,oo_gifts_total,oo_free_2gb
+                    oo_gift_won,oo_gifts_total,oo_free_2gb,oo_72gb
                     FROM stats WHERE id=1""", fetch=True)
     if not s: s = (0,)*15
     while len(s) < 15: s = s + (0,)
@@ -1110,11 +1117,11 @@ def get_stats_text():
     return (f"📊 <b>الإحصائيات</b>\n👥 {users} | 📱 {dz}\n\n"
             f"🔴 جيزي:\n"
             f"  🎁 2G أسبوعي: {s[0]}\n"
-            f"  🎁 6G يومي:   {s[2]}\n"
-            f"  💰 العروض: {s[3]}\n\n"
-            f"🟠 أوريدو:\n  🔐: {s[4]}  👻: {s[5]}\n"
-            f"  ⚡ 20دج-1Go: {s[10]}\n"
-            f"  🎁 2Go FREE: {s[14]}")
+            f"  💰 العروض: {s[2]}\n\n"
+            f"🟠 أوريدو:\n  🔐: {s[3]}  👻: {s[4]}\n"
+            f"  ⚡ 20دج-1Go: {s[9]}\n"
+            f"  🎁 2Go FREE: {s[13]}\n"
+            f"  🔥 72Go: {s[14]}")
 
 def oo_dynamic_menu(services, uid=None):
     m = InlineKeyboardMarkup(row_width=1)
@@ -1123,6 +1130,7 @@ def oo_dynamic_menu(services, uid=None):
     m.add(InlineKeyboardButton("👻 سناب", callback_data="oo_snap"))
     m.add(InlineKeyboardButton("⚡ 20 دج — 1Go — 24H", callback_data="oo_quick_20_1g"))
     m.add(InlineKeyboardButton("🎁 2 جيجا مجاني — 24H", callback_data="oo_quick_free_2gb"))
+    m.add(InlineKeyboardButton("🔥 72 جيجا (أول نوفمبر)", callback_data="oo_quick_72gb"))
     m.add(InlineKeyboardButton("🔄 تغيير الرقم", callback_data="oo_change"))
     m.add(InlineKeyboardButton("🗑️ حذف الرقم المحفوظ", callback_data="delete_my_number"))
     if uid and uid == ADMIN_ID:
@@ -1210,54 +1218,6 @@ async def dz_process(uid, phone, action):
             await bot.send_message(uid,
                 "⏰ <b>راك مفعّل 2 جيجا من قبل</b>\n\n"
                 "🎁 العرض: 2 جيجا — أسبوع\n\n"
-                "💡 ما تقدرش تفعّلو مرتين، انتظر يخلص العرض\n"
-                "📞 اطلب <code>*200#</code> باش تتأكد من الباقة",
-                reply_markup=back_btn("main_menu"), parse_mode='HTML')
-        elif res == "NO_BALANCE":
-            await bot.send_message(uid, "❌ رصيد غير كافي (يلزم رصيد رمزي)",
-                reply_markup=back_btn("main_menu"))
-        elif res == "RATE_LIMIT":
-            await bot.send_message(uid, "🚫 تجاوزت الحد المسموح، جرّب بعد دقائق",
-                reply_markup=back_btn("main_menu"))
-        elif res == "NOT_ALLOWED":
-            await bot.send_message(uid, "🚫 العرض غير متاح لرقمك",
-                reply_markup=back_btn("main_menu"))
-        else:
-            await bot.send_message(uid, f"❌ فشل التفعيل ({res})",
-                reply_markup=back_btn("main_menu"))
-        return
-    
-    elif action == "6gb_daily":
-        last = db_query("SELECT last_activation_6gb_daily FROM numbers WHERE phone=?",
-                        (phone,), fetch=True)[0] or 0
-        p = time.time() - last
-        if p < COOLDOWN_6GB_DAILY:
-            r = int(COOLDOWN_6GB_DAILY - p)
-            hh = r // 3600; mm = (r % 3600) // 60
-            await bot.send_message(uid,
-                f"❌ لم تكمل 24 ساعة بعد\n⏱️ متبقّي: {hh} س {mm} د",
-                reply_markup=back_btn("main_menu"))
-            return
-        res = await asyncio.to_thread(dj_activate_6gb_daily, token, phone)
-        if res == "SUCCESS":
-            db_query("UPDATE numbers SET last_activation_6gb_daily=? WHERE phone=?",
-                     (time.time(), phone))
-            inc_stat("total_6gb_daily")
-            await notify_group_success("6 جيجا يومي (مجاناً)", "Djezzy 🔴")
-            await send_result(uid,
-                f"✅ <b>تم التفعيل بنجاح</b> 🎉\n\n"
-                f"📱 <code>{dz_mask(phone)}</code>\n"
-                f"🎁 <b>6 جيجا</b> — 24 ساعة\n"
-                f"💰 <b>مجاناً 100%</b>\n\n"
-                f"💡 اطلب <code>*200#</code> باش تتأكد",
-                "main_menu")
-        elif res == "EXPIRED":
-            db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (phone,))
-            await _dz_request_new_otp(uid, phone); return
-        elif res == "LIMIT":
-            await bot.send_message(uid,
-                "⏰ <b>راك مفعّل 6 جيجا من قبل</b>\n\n"
-                "🎁 العرض: 6 جيجا — 24h\n\n"
                 "💡 ما تقدرش تفعّلو مرتين، انتظر يخلص العرض\n"
                 "📞 اطلب <code>*200#</code> باش تتأكد من الباقة",
                 reply_markup=back_btn("main_menu"), parse_mode='HTML')
@@ -1368,7 +1328,6 @@ async def cmd_admin(message):
 # ==================== Start ====================
 @bot.message_handler(commands=['start'], chat_types=['private'])
 async def cmd_start(message):
-    _last_heartbeat[0] = time.time()
     uid = message.from_user.id; now = time.time()
     await typing(message.chat.id)
     if not await check_subscription(uid):
@@ -1392,7 +1351,6 @@ async def cmd_start(message):
     call.message and call.message.chat and call.message.chat.type == 'private'
 ))
 async def cb_handler(call):
-    _last_heartbeat[0] = time.time()
     try:
         await _cb_inner(call)
     except Exception as e:
@@ -1576,10 +1534,6 @@ async def _cb_inner(call):
         nums = db_query("SELECT phone FROM numbers WHERE user_id=? ORDER BY added_date DESC LIMIT 1", (uid,), fetchall=True)
         if not nums: await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu")); return
         await dz_process(uid, nums[0][0], "2gb"); return
-    if call.data == "activate_6gb_daily":
-        nums = db_query("SELECT phone FROM numbers WHERE user_id=? ORDER BY added_date DESC LIMIT 1", (uid,), fetchall=True)
-        if not nums: await bot.send_message(uid, "⚠️ أضف رقماً أولاً.", reply_markup=back_btn("main_menu")); return
-        await dz_process(uid, nums[0][0], "6gb_daily"); return
     if call.data == "show_all_offers":
         await bot.send_message(uid, "💰:", reply_markup=all_offers_markup()); return
     if call.data.startswith("offer_details_"):
@@ -1789,10 +1743,36 @@ async def oo_cb_handler(call):
             await bot.send_message(uid, f"<b>🔍 تفاصيل للأدمن:</b>\ncode={r.get('code')}\n<pre>{_html.escape(str(r.get('data',{}))[:1500])}</pre>", parse_mode='HTML')
         return
 
+    if data == "oo_quick_72gb":
+        r = await asyncio.to_thread(oo_check_72gb_status, ms, at, meta)
+        if r.get("status") == "ok":
+            d = r.get("data", {})
+            played = d.get("played", True)
+            enable = d.get("gameUIEnable", False)
+            
+            if not enable:
+                await bot.send_message(uid, "🚫 <b>اللعبة غير متاحة لحسابك حالياً.</b>\n\n💡 جرب لاحقاً.", reply_markup=back_btn("oo_back_menu"))
+                return
+                
+            if played:
+                await bot.send_message(uid, "⏰ <b>راك لعبت وخذيت الجائزة ديجا في هذي الحملة.</b>\n\n💡 انتظر الحملة الجاية.", reply_markup=back_btn("oo_back_menu"))
+                return
+                
+            await bot.send_message(uid, "⏳ <b>جاري محاولة تفعيل 72 جيجا...</b>\n\n💡 قد تتطلب العملية بعض الوقت.", parse_mode='HTML')
+            claim = await asyncio.to_thread(oo_claim_72gb, ms, at, meta)
+            if claim.get("status") == "ok":
+                inc_stat("oo_72gb")
+                await notify_group_success("72 جيجا (أول نوفمبر)", "Ooredoo 🟠")
+                await send_result(uid, f"🎉 <b>مبروك!</b>\n\n✅ تم تفعيل 72 جيجا بنجاح لرقمك!\n\n💡 تحقق من رصيدك بـ <code>*200#</code>", "oo_back_menu")
+            else:
+                await bot.send_message(uid, "⚠️ <b>اللعبة متاحة لكن التفعيل لم ينجح بعد.</b>\n\n💡 يرجى المحاولة بعد قليل (قد يكون المؤقت الداخلي لم ينتهِ).\n⏳ <b>البوت سيحاول تفعيلها تلقائياً في الخلفية.</b>", reply_markup=back_btn("oo_back_menu"))
+        else:
+            await bot.send_message(uid, "❌ تعبر جلب حالة اللعبة.", reply_markup=back_btn("oo_back_menu"))
+        return
+
 # ==================== TEXT HANDLER ====================
 @bot.message_handler(func=lambda m: True, content_types=['text'], chat_types=['private'])
 async def handle_text(message):
-    _last_heartbeat[0] = time.time()
     try:
         await _text_inner(message)
     except Exception as e:
@@ -1979,15 +1959,20 @@ async def _polling_supervisor():
             await asyncio.sleep(3)
 
 async def main():
+    global MAIN_EVENT_LOOP
+    MAIN_EVENT_LOOP = asyncio.get_running_loop()
+    
     print("=" * 60)
-    print("🤖 البوت الموحّد v2 — Robust + Oxylabs + تفعيل 2GB/6GB (الأصل)")
+    print("🤖 البوت الموحّد v3 — Robust + 72GB Auto Claimer")
     print(f"👤 الأدمن: {ADMIN_ID}")
     print("=" * 60)
     _install_global_handlers()
     user_steps.update(load_steps_saved())
+    
     for fn in (oo_auto_refresh, dz_auto_refresh, steps_saver_worker,
-               reset_steps_worker, _proxy_proactive_rotate):
+               reset_steps_worker, _proxy_proactive_rotate, oo_auto_claim_72gb_worker):
         threading.Thread(target=fn, daemon=True, name=fn.__name__).start()
+        
     print("✅ البوت يعمل...")
     while not _stop_threads.is_set():
         try:
