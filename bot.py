@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""البوت الموحّد v2 — Robust + Oxylabs + تفعيل حقيقي"""
+"""البوت الموحّد v2 — Robust + Oxylabs + تفعيل 2GB/6GB (الأصل)"""
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -462,94 +462,35 @@ def dj_extract_price(p):
     except: pass
     return None
 
-# ==================== 🎯 محول ردود Djezzy ====================
-def _parse_activation_result(status_code, text_body, json_body):
-    if status_code == 401: return "EXPIRED"
-    if status_code == 402: return "NO_BALANCE"
-    if status_code == 403: return "NOT_ALLOWED"
-    if status_code == 409: return "LIMIT"
-    if status_code == 429: return "RATE_LIMIT"
-    if status_code not in (200, 201, 202):
-        return "FAILED"
-
-    message = ""
-    json_status = None
-    if isinstance(json_body, dict):
-        msg_val = json_body.get("message") or json_body.get("msg") or ""
-        if isinstance(msg_val, dict):
-            msg_val = msg_val.get("en") or msg_val.get("fr") or msg_val.get("ar") or str(msg_val)
-        message = str(msg_val).lower() if msg_val else ""
-        json_status = json_body.get("status")
-
-    body_lower = (text_body or "").lower()
-    combined = message + " " + body_lower
-
-    already_kw = (
-        "already", "déjà", "deja", "dèja",
-        "exist", "duplicate", "subscribed",
-        "مفعل", "مفعّل", "مسبق", "سابق", "من قبل"
-    )
-    if any(k in combined for k in already_kw):
-        return "LIMIT"
-
-    success_kw = (
-        "successfully activated", "activated successfully",
-        "product successfully activated",
-        "activation réussie", "activé avec succès",
-        "تم التفعيل بنجاح", "تم تفعيل بنجاح",
-    )
-    if any(k in combined for k in success_kw):
-        return "SUCCESS"
-
-    error_kw = (
-        "error", "failed", "failure", "invalid",
-        "not allowed", "not_eligible", "not eligible",
-        "insufficient", "refus", "impossible", "interdit",
-        "échec", "echoue", "خطأ", "فشل", "غير مسموح",
-        "unavailable", "indisponible"
-    )
-    if any(k in combined for k in error_kw):
-        return "FAILED"
-
-    if json_status is not None:
-        try:
-            if int(json_status) >= 400:
-                return "FAILED"
-        except:
-            pass
-
-    return "UNKNOWN"
-
-# ==================== 🎁 تفعيل 2 جيجا ====================
+# ==================== 🎁 تفعيل 2 جيجا (الأصل) ====================
 def dj_activate_2gb(token, phone):
     h = DJ_HEADERS.copy()
     h['Authorization'] = f"Bearer {token}"
     h['User-Agent'] = "MobileApp/3.0.7"
     endpoints = [
-        f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}",
         f"{DJ_BASE}/api/v1/services/shake/{phone}",
+        f"{DJ_BASE}/api/v1/services/walk/activate-reward/{phone}",
         f"{DJ_BASE}/api/v1/subscribers/activate-product/{phone}",
     ]
+    last_code = 0
     for url in endpoints:
-        try:
-            r = _dz_req("POST", url, headers=h,
-                        json_body={"packageCode": "GIFTWALKWIN2GO"}, timeout=20)
-            if r is None: continue
-            try: j = r.json()
-            except: j = None
-            result = _parse_activation_result(r.status_code, r.text, j)
-            logging.info(f"[DJ-2GB] {phone} {url.split('/')[-2]} → HTTP {r.status_code} | {result} | {str(r.text)[:200]}")
-            if result == "SUCCESS": return "SUCCESS"
-            if result == "LIMIT":   return "LIMIT"
-            if result in ("EXPIRED", "NO_BALANCE", "RATE_LIMIT", "NOT_ALLOWED"):
-                return result
-            time.sleep(0.3)
-        except Exception as e:
-            logging.warning(f"[DJ-2GB] {phone} {url[:50]}: {e}")
-            continue
-    return "UNKNOWN"
+        r = _dz_req("POST", url, headers=h,
+                    json_body={"packageCode": "GIFTWALKWIN2GO"}, timeout=20)
+        if r is None: continue
+        last_code = r.status_code
+        if r.status_code == 401: return "EXPIRED"
+        if r.status_code in (200, 201):
+            try: body = r.text.lower()
+            except: body = ""
+            if "already" in body: return "LIMIT"
+            return "SUCCESS"
+        if r.status_code == 402: return "NO_BALANCE"
+        if r.status_code == 429: return "RATE_LIMIT"
+        time.sleep(0.3)
+    if last_code == 403: return "NOT_ALLOWED"
+    return "FAILED"
 
-# ==================== 🎁 تفعيل 6 جيجا ====================
+# ==================== 🎁 تفعيل 6 جيجا (الأصل) ====================
 def dj_activate_6gb_daily(token, phone):
     h = DJ_HEADERS.copy()
     h['Authorization'] = f"Bearer {token}"
@@ -559,24 +500,27 @@ def dj_activate_6gb_daily(token, phone):
         f"{DJ_BASE}/api/v1/services/shake/{phone}",
         f"{DJ_BASE}/api/v1/subscribers/activate-product/{phone}",
     ]
+    last_code = 0
     for url in endpoints:
         try:
             r = _dz_req("POST", url, headers=h,
                         json_body={"packageCode": "GIFTWALKWIN6GDAY"}, timeout=20)
             if r is None: continue
-            try: j = r.json()
-            except: j = None
-            result = _parse_activation_result(r.status_code, r.text, j)
-            logging.info(f"[DJ-6GB] {phone} {url.split('/')[-2]} → HTTP {r.status_code} | {result} | {str(r.text)[:200]}")
-            if result == "SUCCESS": return "SUCCESS"
-            if result == "LIMIT":   return "LIMIT"
-            if result in ("EXPIRED", "NO_BALANCE", "RATE_LIMIT", "NOT_ALLOWED"):
-                return result
+            last_code = r.status_code
+            if r.status_code == 401: return "EXPIRED"
+            if r.status_code in (200, 201):
+                try: body = r.text.lower()
+                except: body = ""
+                if "already" in body: return "LIMIT"
+                return "SUCCESS"
+            if r.status_code == 402: return "NO_BALANCE"
+            if r.status_code == 429: return "RATE_LIMIT"
             time.sleep(0.3)
         except Exception as e:
-            logging.warning(f"[DJ-6GB] {phone} {url[:50]}: {e}")
+            logging.warning(f"[DJ-6GB] {url[:60]}: {e}")
             continue
-    return "UNKNOWN"
+    if last_code == 403: return "NOT_ALLOWED"
+    return "FAILED"
 
 # ==================== عروض مدفوعة ====================
 async def dz_activate_paid_offer_async(token, phone, package_code, offer_type, offer_name, price):
@@ -1269,15 +1213,6 @@ async def dz_process(uid, phone, action):
                 "💡 ما تقدرش تفعّلو مرتين، انتظر يخلص العرض\n"
                 "📞 اطلب <code>*200#</code> باش تتأكد من الباقة",
                 reply_markup=back_btn("main_menu"), parse_mode='HTML')
-        elif res == "UNKNOWN":
-            await bot.send_message(uid,
-                "⚠️ <b>تعذر التأكد من التفعيل</b>\n\n"
-                "🎁 العرض: 2 جيجا — أسبوع\n\n"
-                "💡 <b>باش تتأكد:</b>\n"
-                "📞 اطلب <code>*200#</code>\n\n"
-                "📌 اذا ظهرت 2 جيجا → التفعيل نجح ✅\n"
-                "📌 اذا ما ظهرتش → أعد المحاولة بعد قليل",
-                reply_markup=back_btn("main_menu"), parse_mode='HTML')
         elif res == "NO_BALANCE":
             await bot.send_message(uid, "❌ رصيد غير كافي (يلزم رصيد رمزي)",
                 reply_markup=back_btn("main_menu"))
@@ -1325,15 +1260,6 @@ async def dz_process(uid, phone, action):
                 "🎁 العرض: 6 جيجا — 24h\n\n"
                 "💡 ما تقدرش تفعّلو مرتين، انتظر يخلص العرض\n"
                 "📞 اطلب <code>*200#</code> باش تتأكد من الباقة",
-                reply_markup=back_btn("main_menu"), parse_mode='HTML')
-        elif res == "UNKNOWN":
-            await bot.send_message(uid,
-                "⚠️ <b>تعذر التأكد من التفعيل</b>\n\n"
-                "🎁 العرض: 6 جيجا — 24h\n\n"
-                "💡 <b>باش تتأكد:</b>\n"
-                "📞 اطلب <code>*200#</code>\n\n"
-                "📌 اذا ظهرت 6 جيجا → التفعيل نجح ✅\n"
-                "📌 اذا ما ظهرتش → أعد المحاولة بعد قليل",
                 reply_markup=back_btn("main_menu"), parse_mode='HTML')
         elif res == "NO_BALANCE":
             await bot.send_message(uid, "❌ رصيد غير كافي (يلزم رصيد رمزي)",
@@ -2004,7 +1930,6 @@ def _install_global_handlers():
         logging.error(f"[GLOBAL-HANDLERS] {e}")
 
 async def _run_polling_once():
-    """تشغيل infinity_polling — فقط skip_pending و timeout (متوافق مع كل الإصدارات)."""
     try:
         await bot.remove_webhook()
     except Exception as e:
@@ -2055,7 +1980,7 @@ async def _polling_supervisor():
 
 async def main():
     print("=" * 60)
-    print("🤖 البوت الموحّد v2 — Robust + Oxylabs + تفعيل حقيقي")
+    print("🤖 البوت الموحّد v2 — Robust + Oxylabs + تفعيل 2GB/6GB (الأصل)")
     print(f"👤 الأدمن: {ADMIN_ID}")
     print("=" * 60)
     _install_global_handlers()
