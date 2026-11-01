@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""v6.8.4 — 2GB Free + Server Monitor + OTP fix + JWT device-id fix"""
+"""v6.8.6 — OTP fast + JWT device-id + no false session expiry + checkpoints cache"""
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -77,7 +77,31 @@ NOTIFY_GROUP = "@ifoekdjdh"
 _oo_72gb_jobs = {}
 _oo_72gb_jobs_lock = threading.Lock()
 OO_72GB_MAX_ATTEMPTS = 40
-OO_OTP_MAX_ATTEMPTS  = 15
+OO_OTP_MAX_ATTEMPTS  = 12
+
+# v6.8.5/6: تحسينات السرعة
+_checkpoint_cache = {}
+_checkpoint_cache_lock = threading.Lock()
+_oo_otp_semaphore = threading.Semaphore(25)
+
+def _get_cached_checkpoint(msisdn, proxy_str):
+    with _checkpoint_cache_lock:
+        key = (msisdn, proxy_str)
+        c = _checkpoint_cache.get(key)
+        if c and time.time() < c["expires"]:
+            return c["nonce"], c["chronos"]
+    return None, None
+
+def _cache_checkpoint(msisdn, proxy_str, nonce, chronos, ttl=45):
+    with _checkpoint_cache_lock:
+        _checkpoint_cache[(msisdn, proxy_str)] = {
+            "nonce": nonce, "chronos": chronos, "expires": time.time() + ttl
+        }
+        if len(_checkpoint_cache) > 200:
+            now = time.time()
+            for k in list(_checkpoint_cache.keys()):
+                if _checkpoint_cache[k]["expires"] < now:
+                    del _checkpoint_cache[k]
 
 # ==================== Oxylabs ====================
 PROXY_USERNAME = "resi_0614e541"
@@ -393,22 +417,21 @@ def _oo_req_with_proxy(method, url, headers, content=b"", timeout=12, proxy_str=
         _mark_oo_proxy_fail(proxy_str, "err"); return None
 
 def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, timeout=15):
+    """v6.8.5: DZ proxy timeout 8s — محاولة واحدة فقط"""
     if _should_use_proxy():
-        for proxy_attempt in range(2):
-            try:
-                s = _new_session(headers, use_proxy=True)
-                if method == "GET": r = s.get(url, params=params, timeout=timeout)
-                elif method == "POST":
-                    if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
-                    elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
-                    else: r = s.post(url, params=params, timeout=timeout)
-                else: r = s.request(method, url, params=params, timeout=timeout)
-                _mark_proxy_success()
-                return r
-            except Exception as e:
-                logging.warning(f"[DZ-REQ] proxy #{proxy_attempt+1}: {str(e)[:80]}")
-                _rotate_proxy_session()
-                if proxy_attempt == 0: time.sleep(0.3)
+        try:
+            s = _new_session(headers, use_proxy=True)
+            if method == "GET": r = s.get(url, params=params, timeout=min(timeout, 8))
+            elif method == "POST":
+                if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=min(timeout, 8))
+                elif data is not None: r = s.post(url, params=params, data=data, timeout=min(timeout, 8))
+                else: r = s.post(url, params=params, timeout=min(timeout, 8))
+            else: r = s.request(method, url, params=params, timeout=min(timeout, 8))
+            _mark_proxy_success()
+            return r
+        except Exception as e:
+            logging.warning(f"[DZ-REQ] proxy: {str(e)[:80]}")
+            _rotate_proxy_session()
     try:
         s = _new_session(headers, use_proxy=False)
         if method == "GET": r = s.get(url, params=params, timeout=timeout)
@@ -835,135 +858,135 @@ def _web_hdrs(msisdn, at, meta, ct=""):
     return h
 
 def ooredoo_send_otp_sync(msisdn, uid):
-    """v6.8.3:
-    • نفس الـ proxy لـ 4 محاولات متتالية
-    • نفس الـ device-fingerprint طوال المحاولات
-    • 403 = OTP SENT بنجاح → توقف فوري
+    """v6.8.5 — سريع للضغط الكبير:
+    • cache checkpoint لكل (رقم، proxy) — يوفر 5-10s
+    • timeouts مخفضة: checkpoint 12s, OTP 20s
+    • 2 محاولات على نفس proxy
+    • semaphore عام (25 طلب متزامن)
+    • 403/401/200 = نجاح فوري
     """
-    START = time.time()
-    OVERALL_TIMEOUT = 180
-    MAX_ATTEMPTS = OO_OTP_MAX_ATTEMPTS
-    SAME_PROXY_ATTEMPTS = 4
-    wait = 2.5
-    last_status = -1
-    last_reason = ""
+    with _oo_otp_semaphore:
+        START = time.time()
+        OVERALL_TIMEOUT = 120
+        MAX_ATTEMPTS = OO_OTP_MAX_ATTEMPTS
+        SAME_PROXY_ATTEMPTS = 2
+        wait = 1.5
+        last_status = -1
+        last_reason = ""
 
-    # device ثابت لكل المحاولات
-    iid_val = _iid()
-    psig = _pld(iid_val)
-    fp = _fp()
+        iid_val = _iid()
+        psig = _pld(iid_val)
+        fp = _fp()
 
-    current_proxy = None
-    attempts_on_current = 0
-    tried_proxies = set()
+        current_proxy = None
+        attempts_on_current = 0
+        tried_proxies = set()
 
-    for attempt in range(MAX_ATTEMPTS):
-        if time.time() - START > OVERALL_TIMEOUT:
-            last_reason = "overall_timeout"
-            logging.warning(f"[OO-OTP] {msisdn} ⏰ timeout after {attempt} attempts")
-            break
-
-        if current_proxy is None or attempts_on_current >= SAME_PROXY_ATTEMPTS:
-            if current_proxy:
-                tried_proxies.add(current_proxy)
-                _release_oo_proxy(uid, reason="switch")
-            if len(tried_proxies) >= 40:
-                tried_proxies.clear()
-            current_proxy = _get_oo_proxy_for_user(uid, exclude=tried_proxies)
-            attempts_on_current = 0
-            if not current_proxy:
-                last_reason = "no_proxy"
+        for attempt in range(MAX_ATTEMPTS):
+            if time.time() - START > OVERALL_TIMEOUT:
+                last_reason = "overall_timeout"
                 break
-            logging.info(f"[OO-OTP] {msisdn} 🔄 NEW proxy={_mask_oo_proxy(current_proxy)} (switch #{len(tried_proxies)})")
 
-        attempts_on_current += 1
-        proxy_str = current_proxy
-        device = {"instance_id": iid_val, "plat_sig": psig, "fp": fp, "proxy_str": proxy_str}
-        ts = _now_ms()
-        nonce, chronos = "", ""
+            if current_proxy is None or attempts_on_current >= SAME_PROXY_ATTEMPTS:
+                if current_proxy:
+                    tried_proxies.add(current_proxy)
+                    _release_oo_proxy(uid, reason="switch")
+                if len(tried_proxies) >= 40: tried_proxies.clear()
+                current_proxy = _get_oo_proxy_for_user(uid, exclude=tried_proxies)
+                attempts_on_current = 0
+                if not current_proxy:
+                    last_reason = "no_proxy"
+                    break
 
-        # Step 1: checkpoint
-        try:
-            h3 = _base_hdrs(msisdn, iid_val, psig, _corr(), ts, fp=fp)
-            h3["x-version"] = X_VERSION_OTP
-            h3.update({"content-type": "application/json; charset=utf-8",
-                       "x-native-integrity-token": INTEGRITY_1,
-                       "x-path": "/api/auth/realms/myooredoo/protocol/openid-connect/token",
-                       "x-method": "POST"})
-            r3 = _oo_req_with_proxy("POST", f"{OO_BFF}/checkpoint/token", h3, b"{}",
-                                    timeout=25, proxy_str=proxy_str)
-            if r3 is None:
-                _mark_oo_proxy_fail(proxy_str, "checkpoint_none")
-                last_status, last_reason = 0, "checkpoint_none"
-                logging.info(f"[OO-OTP] {msisdn} attempt {attempt+1}/{MAX_ATTEMPTS} "
+            attempts_on_current += 1
+            proxy_str = current_proxy
+
+            # ══════ checkpoint (مخزّن إن وُجد) ══════
+            nonce, chronos = _get_cached_checkpoint(msisdn, proxy_str)
+            if not nonce:
+                try:
+                    ts = _now_ms()
+                    h3 = _base_hdrs(msisdn, iid_val, psig, _corr(), ts, fp=fp)
+                    h3["x-version"] = X_VERSION_OTP
+                    h3.update({"content-type": "application/json; charset=utf-8",
+                               "x-native-integrity-token": INTEGRITY_1,
+                               "x-path": "/api/auth/realms/myooredoo/protocol/openid-connect/token",
+                               "x-method": "POST"})
+                    r3 = _oo_req_with_proxy("POST", f"{OO_BFF}/checkpoint/token", h3, b"{}",
+                                            timeout=12, proxy_str=proxy_str)
+                    if r3 is None:
+                        _mark_oo_proxy_fail(proxy_str, "checkpoint_none")
+                        last_status, last_reason = 0, "checkpoint_none"
+                        logging.info(f"[OO-OTP] {msisdn} attempt {attempt+1}/{MAX_ATTEMPTS} "
+                                     f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → checkpoint FAIL")
+                        time.sleep(wait); wait = min(wait * 1.3, 8)
+                        continue
+                    _, rh3, _ = r3
+                    nonce = rh3.get("x-nonce-id") or rh3.get("X-Nonce-Id") or ""
+                    chronos = rh3.get("x-chronos-id") or rh3.get("X-Chronos-Id") or ""
+                    if nonce and chronos:
+                        _cache_checkpoint(msisdn, proxy_str, nonce, chronos, ttl=45)
+                except Exception as e:
+                    logging.error(f"[OO-OTP] checkpoint exc: {e}")
+                    time.sleep(wait); wait = min(wait * 1.3, 8)
+                    continue
+
+            # ══════ OTP ══════
+            try:
+                ts = _now_ms()
+                h4 = {"User-Agent": "Dart/3.11 (dart:io)", "Accept-Encoding": "gzip",
+                      "x-msisdn": msisdn, "x-device-fingerprint": fp,
+                      "x-platform-origin": "mobile-android", "platform": "android",
+                      "x-version": X_VERSION_OTP, "x-signature": X_SIG, "x-timestamp": ts,
+                      "x-platform-info": psig, "x-force-update": "true",
+                      "x-instance-id": iid_val,
+                      "content-type": "application/x-www-form-urlencoded"}
+                if nonce:   h4["x-nonce-id"] = nonce
+                if chronos: h4["x-chronos-id"] = chronos
+                body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}"
+                r4 = _oo_req_with_proxy("POST", OO_AUTH, h4, body, timeout=20, proxy_str=proxy_str)
+                if r4 is None:
+                    _mark_oo_proxy_fail(proxy_str, "otp_none")
+                    last_status, last_reason = 0, "otp_none"
+                    logging.info(f"[OO-OTP] {msisdn} attempt {attempt+1}/{MAX_ATTEMPTS} "
+                                 f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → NONE")
+                    with _checkpoint_cache_lock:
+                        _checkpoint_cache.pop((msisdn, proxy_str), None)
+                    time.sleep(wait); wait = min(wait * 1.3, 8)
+                    continue
+                c4, _, _ = r4
+                last_status = c4
+                logging.info(f"[OO-OTP] {msisdn} uid={uid} attempt {attempt+1}/{MAX_ATTEMPTS} "
                              f"proxy={_mask_oo_proxy(proxy_str)} "
-                             f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → checkpoint FAIL")
-                time.sleep(wait); wait = min(wait * 1.3, 12)
+                             f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → {c4}")
+
+                # ✅ 403/401/200 = OTP SENT
+                if c4 in (200, 401, 403):
+                    _mark_oo_proxy_ok(proxy_str)
+                    _release_oo_proxy(uid, reason="success")
+                    with _checkpoint_cache_lock:
+                        _checkpoint_cache.pop((msisdn, proxy_str), None)
+                    return {"device": {"instance_id": iid_val, "plat_sig": psig,
+                                       "fp": fp, "proxy_str": proxy_str},
+                            "otp_sent": True, "status": c4}
+
+                if c4 == 429:
+                    attempts_on_current = SAME_PROXY_ATTEMPTS
+                    time.sleep(wait * 1.2); wait = min(wait * 1.3, 10)
+                    continue
+
+                _mark_oo_proxy_fail(proxy_str, f"http{c4}")
+                time.sleep(wait); wait = min(wait * 1.3, 8)
                 continue
-            _, rh3, _ = r3
-            nonce = rh3.get("x-nonce-id") or rh3.get("X-Nonce-Id") or ""
-            chronos = rh3.get("x-chronos-id") or rh3.get("X-Chronos-Id") or ""
-        except Exception as e:
-            logging.error(f"[OO-OTP] checkpoint exc: {e}")
-            time.sleep(wait); wait = min(wait * 1.3, 12)
-            continue
-
-        # Step 2: إرسال OTP
-        try:
-            h4 = {"User-Agent": "Dart/3.11 (dart:io)", "Accept-Encoding": "gzip",
-                  "x-msisdn": msisdn, "x-device-fingerprint": fp,
-                  "x-platform-origin": "mobile-android", "platform": "android",
-                  "x-version": X_VERSION_OTP, "x-signature": X_SIG, "x-timestamp": ts,
-                  "x-platform-info": psig, "x-force-update": "true",
-                  "x-instance-id": iid_val,
-                  "content-type": "application/x-www-form-urlencoded"}
-            if nonce:   h4["x-nonce-id"] = nonce
-            if chronos: h4["x-chronos-id"] = chronos
-            body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}"
-            r4 = _oo_req_with_proxy("POST", OO_AUTH, h4, body, timeout=35, proxy_str=proxy_str)
-            if r4 is None:
-                _mark_oo_proxy_fail(proxy_str, "otp_none")
-                last_status, last_reason = 0, "otp_none"
-                logging.info(f"[OO-OTP] {msisdn} attempt {attempt+1}/{MAX_ATTEMPTS} "
-                             f"proxy={_mask_oo_proxy(proxy_str)} "
-                             f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → NONE")
-                time.sleep(wait); wait = min(wait * 1.3, 12)
-                continue
-            c4, _, _ = r4
-            last_status = c4
-            logging.info(f"[OO-OTP] {msisdn} uid={uid} attempt {attempt+1}/{MAX_ATTEMPTS} "
-                         f"proxy={_mask_oo_proxy(proxy_str)} "
-                         f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → {c4}")
-
-            # ✅ 403 = OTP SENT بنجاح
-            if c4 == 403:
-                logging.info(f"[OO-OTP] {msisdn} ✅ OTP SENT (403 = success)")
-                _release_oo_proxy(uid, reason="success")
-                return {"device": device, "otp_sent": True, "status": 403}
-
-            if c4 in (200, 401):
-                logging.info(f"[OO-OTP] {msisdn} ✅ OTP SENT (code={c4})")
-                _release_oo_proxy(uid, reason="success")
-                return {"device": device, "otp_sent": True, "status": c4}
-
-            if c4 == 429:
-                logging.info(f"[OO-OTP] {msisdn} ⚠️ 429 rate-limit → switching proxy")
-                attempts_on_current = SAME_PROXY_ATTEMPTS
-                time.sleep(wait * 1.5); wait = min(wait * 1.3, 15)
+            except Exception as e:
+                logging.error(f"[OO-OTP] send exc: {e}")
+                time.sleep(wait); wait = min(wait * 1.3, 8)
                 continue
 
-            _mark_oo_proxy_fail(proxy_str, f"http{c4}")
-            time.sleep(wait); wait = min(wait * 1.3, 12)
-            continue
-        except Exception as e:
-            logging.error(f"[OO-OTP] send exc: {e}")
-            time.sleep(wait); wait = min(wait * 1.3, 12)
-            continue
-
-    _release_oo_proxy(uid, reason="all_failed")
-    logging.warning(f"[OO-OTP] {msisdn} uid={uid} ❌ FAILED | reason={last_reason} last={last_status}")
-    return {"device": {"instance_id": iid_val, "plat_sig": psig, "fp": fp, "proxy_str": None},
-            "otp_sent": False, "status": last_status, "reason": last_reason or "all_proxies_failed"}
+        _release_oo_proxy(uid, reason="all_failed")
+        logging.warning(f"[OO-OTP] {msisdn} uid={uid} ❌ FAILED | {last_reason} last={last_status}")
+        return {"device": {"instance_id": iid_val, "plat_sig": psig, "fp": fp, "proxy_str": None},
+                "otp_sent": False, "status": last_status, "reason": last_reason or "all_proxies_failed"}
 
 def ooredoo_verify_otp_sync(msisdn, otp, device, uid):
     proxy_str = device.get("proxy_str")
@@ -1085,18 +1108,22 @@ def oo_activate_snapchat(msisdn, at, meta, uid):
     return "error"
 
 def oo_activate_ramadan_72gb(msisdn, at, meta, uid):
-    """v6.8.4:
-    • device-id من JWT مباشرة (سبب 401 السابق)
-    • إصلاح None unpack
-    • نفس البروكسي 4 محاولات
-    • 200 = نجاح، 401 = تبديل proxy وجرّب
+    """v6.8.6:
+    • device-id: JWT → meta → توليد (3 مستويات fallback)
+    • 401 يحاول 3 بروكسيات
+    • SAME_PROXY_ATTEMPTS = 2
     """
     jwt_device_id = _exdid(at)
-    if not jwt_device_id:
-        logging.error(f"[OO-RAMADAN-72GB] {msisdn} ❌ device-id missing in JWT")
-        return {"status": "unauthorized", "data": {"_error": "no_device_id_in_jwt"}}
+    if jwt_device_id:
+        iid_val = jwt_device_id
+        logging.info(f"[OO-RAMADAN-72GB] {msisdn} device-id from JWT")
+    elif meta.get("tok_instance_id"):
+        iid_val = meta["tok_instance_id"]
+        logging.info(f"[OO-RAMADAN-72GB] {msisdn} device-id from meta (fallback)")
+    else:
+        iid_val = _iid()
+        logging.warning(f"[OO-RAMADAN-72GB] {msisdn} device-id generated (no JWT/meta)")
 
-    iid_val = jwt_device_id
     psig = _pld(iid_val)
     fp = meta.get("tok_fingerprint") or _fp()
 
@@ -1120,25 +1147,24 @@ def oo_activate_ramadan_72gb(msisdn, at, meta, uid):
     body = json.dumps({"couponCode": ""}, separators=(",", ":"))
 
     MAX_ATTEMPTS = OO_72GB_MAX_ATTEMPTS
-    SAME_PROXY_ATTEMPTS = 4
-    wait = 2.5
+    SAME_PROXY_ATTEMPTS = 2
+    wait = 2.0
     last_c, last_resp = 0, {}
 
     current_proxy = None
     attempts_on_current = 0
     tried_proxies = set()
+    consecutive_401 = 0
 
     for attempt in range(MAX_ATTEMPTS):
         if current_proxy is None or attempts_on_current >= SAME_PROXY_ATTEMPTS:
             if current_proxy:
                 tried_proxies.add(current_proxy)
                 _release_oo_proxy(uid, reason="switch")
-            if len(tried_proxies) >= 40:
-                tried_proxies.clear()
+            if len(tried_proxies) >= 40: tried_proxies.clear()
             current_proxy = _get_oo_proxy_for_user(uid, exclude=tried_proxies)
             attempts_on_current = 0
-            if not current_proxy:
-                break
+            if not current_proxy: break
             logging.info(f"[OO-RAMADAN-72GB] {msisdn} 🔄 NEW proxy={_mask_oo_proxy(current_proxy)}")
 
         attempts_on_current += 1
@@ -1149,15 +1175,12 @@ def oo_activate_ramadan_72gb(msisdn, at, meta, uid):
 
         try:
             r = _oo_req_with_proxy("POST", f"{OO_BFF}/ramadan/activate", h, body,
-                                   timeout=30, proxy_str=proxy_str)
+                                   timeout=20, proxy_str=proxy_str)
             if r is None:
                 last_c, last_resp = 0, {"_error": "response_none"}
-                logging.info(
-                    f"[OO-RAMADAN-72GB] {msisdn} attempt {attempt+1}/{MAX_ATTEMPTS} "
-                    f"proxy={_mask_oo_proxy(proxy_str)} "
-                    f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → NONE"
-                )
-                time.sleep(wait); wait = min(wait * 1.3, 12)
+                logging.info(f"[OO-RAMADAN-72GB] {msisdn} attempt {attempt+1}/{MAX_ATTEMPTS} "
+                             f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → NONE")
+                time.sleep(wait); wait = min(wait * 1.3, 10)
                 continue
             c, _, resp = r
             last_c, last_resp = c, resp
@@ -1169,7 +1192,7 @@ def oo_activate_ramadan_72gb(msisdn, at, meta, uid):
         except Exception as e:
             logging.error(f"[OO-RAMADAN-72GB] {msisdn} attempt {attempt+1} exc: {e}")
             last_c, last_resp = 0, {"_error": str(e)[:100]}
-            time.sleep(wait); wait = min(wait * 1.3, 12)
+            time.sleep(wait); wait = min(wait * 1.3, 10)
             continue
 
         if last_c in (200, 201):
@@ -1179,18 +1202,21 @@ def oo_activate_ramadan_72gb(msisdn, at, meta, uid):
             return {"status": "ok", "data": last_resp}
 
         if last_c == 401:
-            if len(tried_proxies) < 2 and attempt < 8:
-                logging.info(f"[OO-RAMADAN-72GB] {msisdn} ⚠️ 401 → switching proxy")
+            consecutive_401 += 1
+            if consecutive_401 < 3:
+                logging.info(f"[OO-RAMADAN-72GB] {msisdn} ⚠️ 401 #{consecutive_401} → switching proxy")
                 attempts_on_current = SAME_PROXY_ATTEMPTS
                 time.sleep(wait); wait = min(wait * 1.3, 10)
                 continue
             return {"status": "unauthorized", "data": last_resp}
 
+        consecutive_401 = 0
+
         if last_c == 404:
             return {"status": "not_allowed", "data": last_resp}
 
         _mark_oo_proxy_fail(proxy_str, f"http{last_c}")
-        time.sleep(wait); wait = min(wait * 1.3, 12)
+        time.sleep(wait); wait = min(wait * 1.3, 10)
 
     return {"status": "error", "code": last_c, "data": last_resp}
 
@@ -1308,16 +1334,26 @@ def dz_mask(m):
     return "0" + m[3:] if m.startswith("213") else m
 
 def oo_ensure_valid(uid, user):
+    """v6.8.6: لا ترجع None أبداً — استخدم التوكن كما هو إذا refresh فشل"""
     if not user or not user.get("access_token"): return None
     issued = user.get("issued_at", 0); exp = user.get("expires_in", 0)
-    if issued and exp and (time.time() - issued) < (exp - 1800): return user
+
+    # هامش 60s فقط (بدل 1800s) — يقلل refresh غير الضروري
+    if issued and exp and (time.time() - issued) < (exp - 60):
+        return user
+
+    logging.info(f"[OO] uid={uid} token near expiry, refreshing...")
     ref = ooredoo_refresh_token_sync(user["msisdn"], user.get("refresh_token",""),
                                      {"instance_id": user.get("tok_instance_id"),
                                       "plat_sig": user.get("tok_plat_sig"),
                                       "fp": user.get("tok_fingerprint")}, uid)
     if ref:
-        user.update(ref); oo_save(uid, user); return user
-    return None
+        user.update(ref); oo_save(uid, user)
+        logging.info(f"[OO] uid={uid} ✅ refreshed")
+        return user
+
+    logging.warning(f"[OO] uid={uid} refresh failed — trying with existing token")
+    return user   # ← لا None!
 
 _stop_threads = threading.Event()
 
@@ -1332,7 +1368,7 @@ def oo_auto_refresh():
                     u = oo_load(int(uid_s))
                     if not u or not u.get("access_token"): continue
                     issued = u.get("issued_at", 0); exp = u.get("expires_in", 0)
-                    if issued and exp and (time.time() - issued) >= (exp - 600):
+                    if issued and exp and (time.time() - issued) >= (exp - 300):
                         oo_ensure_valid(int(uid_s), u)
                 except: pass
         except: pass
@@ -1415,7 +1451,6 @@ def _check_dz_server_alive():
     return False
 
 def _check_oo_server_alive():
-    """v6.8.4: أي رد (حتى 401/403/404) = السيرفر شغّال"""
     for path in ["/actuator/health", "/subscriptions/getAccountInfo", "/"]:
         try:
             c, _, _ = _oo_req_direct("GET", f"{OO_BFF}{path}",
@@ -1753,9 +1788,11 @@ def get_stats_text():
     with _server_status_lock:
         dz_st = "🟢" if _server_status.get("dz", True) else "🔴"
         oo_st = "🟢" if _server_status.get("oo", True) else "🔴"
+    with _checkpoint_cache_lock:
+        cache_n = len(_checkpoint_cache)
     return (f"📊 <b>الإحصائيات</b>\n👥 {users} | 📱 {dz}\n"
             f"🔌 Proxies: {used}/{len(OO_PROXY_POOL)} | 🚫 {banned}\n"
-            f"📡 Servers: DZ {dz_st} | OO {oo_st}\n\n"
+            f"📡 Servers: DZ {dz_st} | OO {oo_st} | Cache: {cache_n}\n\n"
             f"🔴 جيزي:\n  🔥 72G نوفمبر: {s[15]}\n  🎁 2G أسبوعي: {s[0]}\n  💰 العروض: {s[2]}\n\n"
             f"🟠 أوريدو:\n  🔐: {s[3]}  👻: {s[4]}\n"
             f"  ⚡ 20دج-1Go: {s[9]}\n  🎁 2Go FREE: {s[13]}\n  🔥 72Go: {s[14]}")
@@ -2698,7 +2735,7 @@ async def main():
     global MAIN_EVENT_LOOP
     MAIN_EVENT_LOOP = asyncio.get_running_loop()
     print("=" * 60)
-    print("🤖 البوت v6.8.4 — 2GB Free + Server Monitor + OTP fix + JWT device-id fix")
+    print("🤖 البوت v6.8.6 — Fast OTP + JWT device-id + No false session expiry")
     print(f"👤 ADMIN: {ADMIN_ID}")
     print("=" * 60)
     _install_global_handlers()
