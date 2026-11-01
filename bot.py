@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""البوت الموحّد v3 — Robust + Oxylabs + 72GB Auto"""
+"""البوت الموحّد v6 — رسائل شابة + تفعيل مباشر (72GB بدون انتظار)"""
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -59,6 +59,14 @@ DZ_HEADERS = DJ_HEADERS
 DZ_BASE_URL = DJ_BASE
 PAGE_FOLLOW_TEXT = f"📢 تابع قناتنا: {CHANNEL_LINK}"
 
+DJ_72GB_QR_CODE = "FX8IWas7nzwBIZ0cuEal"
+
+OO_MAINTENANCE = True
+OO_MAINTENANCE_MSG = ("🛠️ <b>شبكة أوريدو في صيانة حالياً</b>\n\n"
+                      "نعتذر منكم، خدمة أوريدو متوقفة مؤقتاً بسبب أعطال في سيرفرات الشبكة.\n"
+                      "⏳ سيتم إصلاحها في أقرب وقت.\n\n"
+                      "✅ <b>يمكنك استخدام جيزي بشكل طبيعي الآن.</b>")
+
 OO_BFF = "https://apis.ooredoo.dz/api/ooredoo-bff"
 OO_AUTH = "https://apis.ooredoo.dz/api/auth/realms/myooredoo/protocol/openid-connect/token"
 OO_CLIENT = "myooredoo-app"
@@ -67,7 +75,7 @@ X_VERSION_OTP = "1.5.16"
 X_SIG = "5c7641dbb82cf11066df68afc91541c967640106a95192740b43d51a5ce6777a"
 NOTIFY_GROUP = "@ifoekdjdh"
 
-# ==================== نظام البروكسي (Oxylabs Residential) ====================
+# ==================== Oxylabs — جيزي ====================
 PROXY_USERNAME = "resi_0614e541"
 PROXY_PASSWORD = "GfOR31Pbb6~G"
 PROXY_COUNTRY  = "dz"
@@ -116,6 +124,131 @@ def _mark_proxy_success():
         _proxy_fail_count[0] = 0
         _proxy_fail_until[0] = 0.0
 
+# ==================== OO Proxy Pool ====================
+_OO_PROXY_AUTH = "1c3kqov80uaa:pl37isqkvtla7o8"
+_OO_PROXY_IPS = [
+    "104.207.37.238","216.26.238.222","216.26.250.168","104.207.49.9",
+    "104.207.40.45","216.26.236.181","216.26.252.144","209.50.163.58",
+    "216.26.252.128","65.111.7.243","65.111.15.199","209.50.166.222",
+    "65.111.10.84","45.3.47.7","104.207.60.70","104.207.41.105",
+    "45.3.35.230","65.111.15.119","216.26.227.234","104.207.47.45",
+    "104.207.36.86","104.207.60.175","45.3.46.144","65.111.13.117",
+    "209.50.187.105","45.3.34.106","104.207.37.80","216.26.248.27",
+    "216.26.250.166","104.207.36.101","216.26.252.179","209.50.163.98",
+    "209.50.160.221","45.3.32.243","209.50.179.206","104.207.48.5",
+    "45.3.34.201","151.123.177.47","45.3.39.53","45.3.40.34",
+    "65.111.7.58","151.123.176.78","216.26.237.178","216.26.236.30",
+    "45.3.42.51","209.50.189.222","209.50.172.2","209.50.185.177",
+    "216.26.228.216","217.181.92.216","216.26.243.226","104.207.62.88",
+    "216.26.242.143","209.50.176.88","216.26.251.250","45.3.44.60",
+    "104.207.38.73","45.3.54.189","216.26.233.153","45.3.34.140",
+    "216.26.255.205","104.207.43.242","104.207.53.230","45.3.52.86",
+    "209.50.188.83","209.50.180.63","104.207.40.181","216.26.235.150",
+    "209.50.180.38","209.50.177.236","104.207.37.247","209.50.169.172",
+    "209.50.181.194","216.26.226.10","104.207.36.168","209.50.167.119",
+    "45.3.47.161","209.50.162.215","209.50.165.46","45.3.34.28",
+    "104.207.62.160","45.3.47.99","216.26.242.93","209.50.164.48",
+    "104.207.48.71","209.50.183.7","104.207.33.146","65.111.29.120",
+    "65.111.14.158","104.207.52.36","104.167.19.123","217.181.92.82",
+    "104.207.39.112","104.207.48.29","45.3.48.106","45.3.33.47",
+    "104.207.43.50","104.207.32.150","104.207.40.85","65.111.0.243",
+]
+OO_PROXY_POOL = [f"{_OO_PROXY_AUTH}@{ip}:3129" for ip in _OO_PROXY_IPS]
+
+_oo_proxy_in_use   = {}
+_oo_user_to_proxy  = {}
+_oo_proxy_health   = {}
+_oo_proxy_lock     = threading.Lock()
+OO_PROXY_HOLD_SECONDS = 180
+OO_PROXY_BAN_AFTER    = 3
+OO_PROXY_BAN_SECONDS  = 600
+OO_PROXY_TIMEOUT      = 12
+OO_PROXY_MAX_TRIES    = 4
+
+def _mask_oo_proxy(p):
+    try:
+        return p.split("@", 1)[1]
+    except:
+        return (p or "?")[:20] + "..."
+
+def _get_oo_proxy_for_user(uid, exclude=None):
+    exclude = exclude or set()
+    with _oo_proxy_lock:
+        now = time.time()
+        existing = _oo_user_to_proxy.get(uid)
+        if existing and existing not in exclude:
+            info = _oo_proxy_in_use.get(existing)
+            if info and (now - info["since"]) < OO_PROXY_HOLD_SECONDS:
+                h = _oo_proxy_health.get(existing, {})
+                if h.get("banned_until", 0) < now:
+                    return existing
+            _oo_proxy_in_use.pop(existing, None)
+            _oo_user_to_proxy.pop(uid, None)
+
+        used = set(_oo_proxy_in_use.keys())
+        candidates = []
+        for p in OO_PROXY_POOL:
+            if p in used or p in exclude:
+                continue
+            h = _oo_proxy_health.get(p, {})
+            if h.get("banned_until", 0) > now:
+                continue
+            candidates.append(p)
+
+        if not candidates:
+            for p in OO_PROXY_POOL:
+                if p in exclude:
+                    continue
+                h = _oo_proxy_health.get(p, {})
+                if h.get("banned_until", 0) > now:
+                    continue
+                candidates.append(p)
+
+        if not candidates:
+            candidates = [p for p in OO_PROXY_POOL if p not in exclude]
+        if not candidates:
+            return OO_PROXY_POOL[0]
+
+        chosen = random.choice(candidates)
+        _oo_proxy_in_use[chosen] = {"uid": uid, "since": now}
+        _oo_user_to_proxy[uid] = chosen
+        logging.info(f"[OO-PROXY] uid={uid} ← {_mask_oo_proxy(chosen)}")
+        return chosen
+
+def _release_oo_proxy(uid, reason="manual"):
+    with _oo_proxy_lock:
+        p = _oo_user_to_proxy.pop(uid, None)
+        if p:
+            _oo_proxy_in_use.pop(p, None)
+            logging.info(f"[OO-PROXY] Released uid={uid} ({reason}) {_mask_oo_proxy(p)}")
+
+def _mark_oo_proxy_success(uid):
+    _release_oo_proxy(uid, reason="success")
+
+def _mark_oo_proxy_fail(proxy_str, reason="conn"):
+    if not proxy_str:
+        return
+    with _oo_proxy_lock:
+        h = _oo_proxy_health.setdefault(proxy_str, {"fails": 0, "banned_until": 0, "last_fail": 0})
+        h["fails"] += 1
+        h["last_fail"] = time.time()
+        if h["fails"] >= OO_PROXY_BAN_AFTER:
+            h["banned_until"] = time.time() + OO_PROXY_BAN_SECONDS
+            logging.warning(f"[OO-PROXY] 🚫 BANNED {_mask_oo_proxy(proxy_str)} {OO_PROXY_BAN_SECONDS}s ({reason}, fails={h['fails']})")
+            _oo_proxy_in_use.pop(proxy_str, None)
+            for u, p in list(_oo_user_to_proxy.items()):
+                if p == proxy_str:
+                    _oo_user_to_proxy.pop(u, None)
+
+def _mark_oo_proxy_ok(proxy_str):
+    if not proxy_str:
+        return
+    with _oo_proxy_lock:
+        h = _oo_proxy_health.get(proxy_str)
+        if h:
+            h["fails"] = 0
+            h["banned_until"] = 0
+
 RATE_PLAN_NAMES = {
     "654": "Dima", "627": "N'YOOZ", "682": "N'YOOZ",
     "625": "La Gold", "626": "La Gold Jdida", "628": "Ooredoo POP",
@@ -150,11 +283,29 @@ SESSIONS_DIR = BASE_DIR / "sessions"
 for d in (BASE_DIR, SESSIONS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
+PENDING_72GB_FILE = BASE_DIR / "pending_72gb.json"
+_pending_72gb = {}
+
+def load_pending_72gb():
+    global _pending_72gb
+    try:
+        if PENDING_72GB_FILE.exists():
+            _pending_72gb = json.loads(PENDING_72GB_FILE.read_text())
+    except:
+        _pending_72gb = {}
+
+def save_pending_72gb():
+    try:
+        PENDING_72GB_FILE.write_text(json.dumps(_pending_72gb, ensure_ascii=False))
+    except:
+        pass
+
+load_pending_72gb()
+
 logging.basicConfig(level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(), logging.FileHandler(str(BASE_DIR / "bot.log"), encoding='utf-8')])
 
-# ==================== 📋 Log Ring Buffer ====================
 _LOG_BUFFER = deque(maxlen=500)
 _LOG_LOCK = threading.Lock()
 
@@ -164,7 +315,8 @@ class _RingBufferHandler(logging.Handler):
             msg = self.format(record)
             with _LOG_LOCK:
                 _LOG_BUFFER.append(msg)
-        except: pass
+        except:
+            pass
 
 _ring_handler = _RingBufferHandler()
 _ring_handler.setFormatter(logging.Formatter('%(asctime)s | %(levelname)s | %(message)s', datefmt='%H:%M:%S'))
@@ -191,16 +343,18 @@ def format_logs_for_telegram(lines, title):
 STEPS_FILE = BASE_DIR / "user_steps.json"
 DB_PATH = str(BASE_DIR / "boykta.db")
 
-# ==================== Sessions ====================
+# ==================== HTTP ====================
 def _new_session(headers=None, use_proxy=True):
     s = requests.Session()
     a = requests.adapters.HTTPAdapter(pool_connections=10, pool_maxsize=20, max_retries=1, pool_block=False)
-    s.mount('http://', a); s.mount('https://', a)
+    s.mount('http://', a)
+    s.mount('https://', a)
     s.verify = False
     if use_proxy and _should_use_proxy():
         proxy_url = _build_proxy_url()
         s.proxies = {"http": proxy_url, "https": proxy_url}
-    if headers: s.headers.update(headers)
+    if headers:
+        s.headers.update(headers)
     return s
 
 async def safe_request(method, url, json=None, headers=None, timeout=15):
@@ -208,23 +362,30 @@ async def safe_request(method, url, json=None, headers=None, timeout=15):
         if _should_use_proxy():
             for proxy_attempt in range(2):
                 try:
-                    s = requests.Session(); s.verify = False
+                    s = requests.Session()
+                    s.verify = False
                     proxy_url = _build_proxy_url()
                     s.proxies = {"http": proxy_url, "https": proxy_url}
                     r = s.request(method, url, json=json, headers=headers, timeout=timeout)
-                    try: j = r.json()
-                    except: j = None
+                    try:
+                        j = r.json()
+                    except:
+                        j = None
                     _mark_proxy_success()
                     return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
                 except Exception as e:
                     logging.warning(f"[SAFE-REQ] proxy #{proxy_attempt+1}: {str(e)[:80]}")
                     _rotate_proxy_session()
-                    if proxy_attempt == 0: time.sleep(0.3)
+                    if proxy_attempt == 0:
+                        time.sleep(0.3)
         try:
-            s = requests.Session(); s.verify = False
+            s = requests.Session()
+            s.verify = False
             r = s.request(method, url, json=json, headers=headers, timeout=timeout)
-            try: j = r.json()
-            except: j = None
+            try:
+                j = r.json()
+            except:
+                j = None
             return {'status': r.status_code, 'json': j, 'text': r.text[:500]}
         except requests.exceptions.Timeout:
             return {'status': 0, 'json': None, 'text': 'timeout'}
@@ -232,77 +393,175 @@ async def safe_request(method, url, json=None, headers=None, timeout=15):
             return {'status': 0, 'json': None, 'text': str(e)[:200]}
     return await asyncio.to_thread(_sync)
 
-def _oo_req(method, url, headers, content=b"", timeout=20, use_proxy=True):
-    data = content if isinstance(content, bytes) else content.encode()
-    if use_proxy and _should_use_proxy():
-        for proxy_attempt in range(2):
-            try:
-                s = _new_session(use_proxy=True)
-                r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
-                head = r.text[:200].lstrip().lower()
-                if head.startswith(("<!doctype", "<html")):
-                    try: r.close()
-                    except: pass
-                    _mark_proxy_failed()
-                    continue
-                try: body = r.json()
-                except: body = {"_raw": r.text[:500]}
-                _mark_proxy_success()
-                try: r.close()
-                except: pass
-                return r.status_code, dict(r.headers), body
-            except Exception as e:
-                logging.warning(f"[OO-REQ] proxy #{proxy_attempt+1} {method} {url[:50]}: {str(e)[:80]}")
-                _rotate_proxy_session()
-                if proxy_attempt == 0: time.sleep(0.3)
+def _oo_req_direct(method, url, headers, data, timeout):
     try:
-        s = _new_session(use_proxy=False)
+        s = requests.Session()
+        s.verify = False
         r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
-        try: body = r.json()
-        except: body = {"_raw": r.text[:500]}
-        try: r.close()
-        except: pass
+        try:
+            body = r.json()
+        except:
+            body = {"_raw": (r.text or "")[:500]}
+        r.close()
         return r.status_code, dict(r.headers), body
     except Exception as e:
-        logging.error(f"[OO-REQ-ERR] {method} {url[:60]}: {str(e)[:100]}")
         return 0, {}, {"_error": str(e)[:100]}
+
+def _oo_req(method, url, headers, content=b"", timeout=None, use_proxy=True, uid=None):
+    data = content if isinstance(content, bytes) else content.encode()
+    tmo = timeout or OO_PROXY_TIMEOUT
+
+    if not use_proxy or not _should_use_proxy():
+        return _oo_req_direct(method, url, headers, data, tmo)
+
+    tried = set()
+    for attempt in range(OO_PROXY_MAX_TRIES):
+        if uid:
+            proxy_str = _get_oo_proxy_for_user(uid, exclude=tried)
+        else:
+            free = [p for p in OO_PROXY_POOL if p not in tried]
+            proxy_str = random.choice(free) if free else None
+        if not proxy_str or proxy_str in tried:
+            break
+        tried.add(proxy_str)
+        proxy_url = f"http://{proxy_str}"
+
+        try:
+            s = requests.Session()
+            s.verify = False
+            a = requests.adapters.HTTPAdapter(pool_connections=5, pool_maxsize=10, max_retries=0, pool_block=False)
+            s.mount('http://', a)
+            s.mount('https://', a)
+            s.proxies = {"http": proxy_url, "https": proxy_url}
+            r = s.request(method, url, headers=headers, data=data, timeout=tmo, allow_redirects=False)
+
+            head = (r.text or "")[:200].lstrip().lower()
+            if head.startswith(("<!doctype", "<html")):
+                r.close()
+                _mark_oo_proxy_fail(proxy_str, "html")
+                continue
+
+            try:
+                body = r.json()
+            except:
+                body = {"_raw": (r.text or "")[:500]}
+            r.close()
+
+            _mark_oo_proxy_ok(proxy_str)
+
+            if r.status_code >= 500:
+                _mark_oo_proxy_fail(proxy_str, f"http{r.status_code}")
+                continue
+
+            return r.status_code, dict(r.headers), body
+
+        except requests.exceptions.Timeout:
+            _mark_oo_proxy_fail(proxy_str, "timeout")
+        except requests.exceptions.ConnectionError:
+            _mark_oo_proxy_fail(proxy_str, "conn")
+        except Exception:
+            _mark_oo_proxy_fail(proxy_str, "err")
+
+    return _oo_req_direct(method, url, headers, data, tmo)
+
+def _oo_req_with_proxy(method, url, headers, content=b"", timeout=12, proxy_str=None):
+    if not proxy_str:
+        return _oo_req_direct(method, url, headers,
+                              content if isinstance(content, bytes) else content.encode(),
+                              timeout)
+    data = content if isinstance(content, bytes) else content.encode()
+    proxy_url = f"http://{proxy_str}"
+    try:
+        s = requests.Session()
+        s.verify = False
+        a = requests.adapters.HTTPAdapter(pool_connections=5, pool_maxsize=10, max_retries=0, pool_block=False)
+        s.mount('http://', a)
+        s.mount('https://', a)
+        s.proxies = {"http": proxy_url, "https": proxy_url}
+        r = s.request(method, url, headers=headers, data=data, timeout=timeout, allow_redirects=False)
+
+        head = (r.text or "")[:200].lstrip().lower()
+        if head.startswith(("<!doctype", "<html")):
+            r.close()
+            _mark_oo_proxy_fail(proxy_str, "html")
+            return None
+
+        try:
+            body = r.json()
+        except:
+            body = {"_raw": (r.text or "")[:500]}
+        r.close()
+
+        if r.status_code >= 500:
+            _mark_oo_proxy_fail(proxy_str, f"http{r.status_code}")
+            return None
+
+        if r.status_code == 403:
+            _mark_oo_proxy_fail(proxy_str, "forbidden")
+
+        _mark_oo_proxy_ok(proxy_str)
+        return r.status_code, dict(r.headers), body
+
+    except requests.exceptions.Timeout:
+        _mark_oo_proxy_fail(proxy_str, "timeout")
+        return None
+    except requests.exceptions.ConnectionError:
+        _mark_oo_proxy_fail(proxy_str, "conn")
+        return None
+    except Exception:
+        _mark_oo_proxy_fail(proxy_str, "err")
+        return None
 
 def _dz_req(method, url, headers=None, params=None, json_body=None, data=None, timeout=15):
     if _should_use_proxy():
         for proxy_attempt in range(2):
             try:
                 s = _new_session(headers, use_proxy=True)
-                if method == "GET": r = s.get(url, params=params, timeout=timeout)
+                if method == "GET":
+                    r = s.get(url, params=params, timeout=timeout)
                 elif method == "POST":
-                    if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
-                    elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
-                    else: r = s.post(url, params=params, timeout=timeout)
-                else: r = s.request(method, url, params=params, timeout=timeout)
+                    if json_body is not None:
+                        r = s.post(url, params=params, json=json_body, timeout=timeout)
+                    elif data is not None:
+                        r = s.post(url, params=params, data=data, timeout=timeout)
+                    else:
+                        r = s.post(url, params=params, timeout=timeout)
+                else:
+                    r = s.request(method, url, params=params, timeout=timeout)
                 _mark_proxy_success()
                 return r
             except Exception as e:
                 logging.warning(f"[DZ-REQ] proxy #{proxy_attempt+1}: {str(e)[:80]}")
                 _rotate_proxy_session()
-                if proxy_attempt == 0: time.sleep(0.3)
+                if proxy_attempt == 0:
+                    time.sleep(0.3)
     try:
         s = _new_session(headers, use_proxy=False)
-        if method == "GET": r = s.get(url, params=params, timeout=timeout)
+        if method == "GET":
+            r = s.get(url, params=params, timeout=timeout)
         elif method == "POST":
-            if json_body is not None: r = s.post(url, params=params, json=json_body, timeout=timeout)
-            elif data is not None: r = s.post(url, params=params, data=data, timeout=timeout)
-            else: r = s.post(url, params=params, timeout=timeout)
-        else: r = s.request(method, url, params=params, timeout=timeout)
+            if json_body is not None:
+                r = s.post(url, params=params, json=json_body, timeout=timeout)
+            elif data is not None:
+                r = s.post(url, params=params, data=data, timeout=timeout)
+            else:
+                r = s.post(url, params=params, timeout=timeout)
+        else:
+            r = s.request(method, url, params=params, timeout=timeout)
         return r
     except Exception as e:
         logging.error(f"[DZ-REQ-ERR] {method} {url[:60]}: {str(e)[:100]}")
         return None
 
 def dz_extract_msg(j):
-    if not j: return ""
+    if not j:
+        return ""
     if isinstance(j, dict):
         msg = j.get("message")
-        if isinstance(msg, dict): return msg.get("ar") or msg.get("en") or msg.get("fr") or ""
-        if isinstance(msg, str): return msg
+        if isinstance(msg, dict):
+            return msg.get("ar") or msg.get("en") or msg.get("fr") or ""
+        if isinstance(msg, str):
+            return msg
     return ""
 
 bot = AsyncTeleBot(TOKEN)
@@ -314,39 +573,54 @@ MAIN_EVENT_LOOP = None
 def init_db():
     conn = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
     c = conn.cursor()
-    try: c.execute("PRAGMA journal_mode=WAL")
-    except: pass
+    try:
+        c.execute("PRAGMA journal_mode=WAL")
+    except:
+        pass
     c.execute('''CREATE TABLE IF NOT EXISTS users 
                  (user_id INTEGER PRIMARY KEY, username TEXT, join_date TEXT, 
                   is_logged_in INTEGER DEFAULT 0, last_phone TEXT)''')
-    try: c.execute("ALTER TABLE users ADD COLUMN last_phone TEXT")
-    except: pass
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN last_phone TEXT")
+    except:
+        pass
     c.execute('''CREATE TABLE IF NOT EXISTS numbers 
                  (phone TEXT PRIMARY KEY, user_id INTEGER, token TEXT,
                   last_activation_2gb REAL DEFAULT 0,
                   last_activation_3gb REAL DEFAULT 0,
                   last_activation_offers REAL DEFAULT 0, added_date TEXT)''')
-    needed = {'user_id': 'INTEGER', 'token': 'TEXT',
-              'last_activation_2gb': 'REAL DEFAULT 0',
-              'last_activation_3gb': 'REAL DEFAULT 0',
-              'last_activation_offers': 'REAL DEFAULT 0', 'added_date': 'TEXT'}
+    needed = {
+        'user_id': 'INTEGER', 'token': 'TEXT',
+        'last_activation_2gb': 'REAL DEFAULT 0',
+        'last_activation_3gb': 'REAL DEFAULT 0',
+        'last_activation_offers': 'REAL DEFAULT 0', 'added_date': 'TEXT'
+    }
     existing_nums = [r[1] for r in c.execute("PRAGMA table_info(numbers)").fetchall()]
     for col, col_type in needed.items():
         if col not in existing_nums:
-            try: c.execute(f"ALTER TABLE numbers ADD COLUMN {col} {col_type}")
-            except: pass
+            try:
+                c.execute(f"ALTER TABLE numbers ADD COLUMN {col} {col_type}")
+            except:
+                pass
     c.execute('''CREATE TABLE IF NOT EXISTS stats (id INTEGER PRIMARY KEY)''')
     if c.execute("SELECT COUNT(*) FROM stats WHERE id = 1").fetchone()[0] == 0:
         c.execute("INSERT INTO stats (id) VALUES (1)")
     all_cols = ["total_2gb","total_3gb","total_offers","oo_logins","oo_snap","oo_spins",
                 "oo_balance","oo_offers_view","dz_logins","oo_soccer_enrolls","oo_20dzd_1go",
-                "oo_gift_plays","oo_gift_won","oo_gifts_total","oo_free_2gb","oo_bundles", "oo_72gb"]
+                "oo_gift_plays","oo_gift_won","oo_gifts_total","oo_free_2gb","oo_bundles", "oo_72gb", "dz_72gb"]
     existing = [r[1] for r in c.execute("PRAGMA table_info(stats)").fetchall()]
     for col in all_cols:
         if col not in existing:
-            try: c.execute(f"ALTER TABLE stats ADD COLUMN {col} INTEGER DEFAULT 0")
-            except: pass
-    conn.commit(); conn.close()
+            try:
+                c.execute(f"ALTER TABLE stats ADD COLUMN {col} INTEGER DEFAULT 0")
+            except:
+                pass
+    # ⚠️ جدول تتبع التفعيلات (لتجنب التفعيل المزدوج)
+    c.execute('''CREATE TABLE IF NOT EXISTS offer_activations
+                 (phone TEXT, offer_code TEXT, activated_at REAL,
+                  PRIMARY KEY (phone, offer_code))''')
+    conn.commit()
+    conn.close()
 
 init_db()
 
@@ -354,21 +628,92 @@ def db_query(q, p=(), fetch=False, fetchall=False):
     for attempt in range(3):
         try:
             conn = sqlite3.connect(DB_PATH, timeout=15, check_same_thread=False)
-            c = conn.cursor(); c.execute(q, p)
+            c = conn.cursor()
+            c.execute(q, p)
             r = None
-            if fetch: r = c.fetchone()
-            elif fetchall: r = c.fetchall()
-            else: conn.commit()
-            conn.close(); return r
+            if fetch:
+                r = c.fetchone()
+            elif fetchall:
+                r = c.fetchall()
+            else:
+                conn.commit()
+            conn.close()
+            return r
         except sqlite3.OperationalError as e:
-            logging.error(f"DB try {attempt+1}: {e}"); time.sleep(0.2 * (attempt + 1))
+            logging.error(f"DB try {attempt+1}: {e}")
+            time.sleep(0.2 * (attempt + 1))
         except Exception as e:
-            logging.error(f"DB: {e}"); return None
+            logging.error(f"DB: {e}")
+            return None
     return None
 
 def inc_stat(field):
-    try: db_query(f"UPDATE stats SET {field} = COALESCE({field}, 0) + 1 WHERE id = 1")
-    except: pass
+    try:
+        db_query(f"UPDATE stats SET {field} = COALESCE({field}, 0) + 1 WHERE id = 1")
+    except:
+        pass
+
+# ==================== فحص وتتبع 72GB ====================
+def dz_check_72gb_status(phone):
+    row = db_query(
+        "SELECT activated_at FROM offer_activations WHERE phone=? AND offer_code='72GB'",
+        (phone,), fetch=True
+    )
+    if row and row[0]:
+        elapsed = time.time() - row[0]
+        if elapsed < 3 * 86400:
+            return {"status": "ACTIVE", "expires_in": 3 * 86400 - elapsed}
+    return {"status": "NONE"}
+
+def dz_mark_72gb_activated(phone):
+    db_query(
+        "INSERT OR REPLACE INTO offer_activations (phone, offer_code, activated_at) "
+        "VALUES (?, '72GB', ?)",
+        (phone, time.time())
+    )
+
+def _check_72gb_in_active_products(token, phone):
+    h = DJ_HEADERS.copy()
+    h['Authorization'] = f"Bearer {token}"
+    endpoints = [
+        f"{DJ_BASE}/api/v1/subscribers/active-products/{phone}",
+        f"{DJ_BASE}/api/v1/subscribers/products/{phone}",
+        f"{DJ_BASE}/api/v1/services/scan/status/{phone}",
+    ]
+    for url in endpoints:
+        try:
+            r = _dz_req("GET", url, headers=h, timeout=8)
+            if r and r.status_code == 200:
+                body = (r.text or "").lower()
+                if any(kw in body for kw in ["72go", "72 gb", "72gb", "72 جيجا"]):
+                    return True
+        except:
+            continue
+    return False
+
+# ==================== حدود التزامن ====================
+_dz_72gb_semaphore = threading.Semaphore(4)
+_dz_72gb_active_uids = set()
+_dz_72gb_active_lock = threading.Lock()
+
+def _try_acquire_72gb_slot(uid):
+    with _dz_72gb_active_lock:
+        if uid in _dz_72gb_active_uids:
+            return False
+        _dz_72gb_active_uids.add(uid)
+    return True
+
+def _release_72gb_slot(uid):
+    with _dz_72gb_active_lock:
+        _dz_72gb_active_uids.discard(uid)
+
+def _acquire_and_activate_72gb(token, phone):
+    if not _dz_72gb_semaphore.acquire(timeout=25):
+        return "TIMEOUT"
+    try:
+        return dj_activate_72gb_scan(token, phone)
+    finally:
+        _dz_72gb_semaphore.release()
 
 def save_steps():
     try:
@@ -377,16 +722,19 @@ def save_steps():
             if isinstance(v, dict):
                 clean[str(k)] = {kk: vv for kk, vv in v.items()
                                  if kk in ("step","phone","msisdn","display","last_activity")}
-            else: clean[str(k)] = v
+            else:
+                clean[str(k)] = v
         STEPS_FILE.write_text(json.dumps(clean, ensure_ascii=False))
-    except: pass
+    except:
+        pass
 
 def load_steps_saved():
     try:
         if STEPS_FILE.exists():
             d = json.loads(STEPS_FILE.read_text())
             return {int(k): v for k, v in d.items()}
-    except: pass
+    except:
+        pass
     return {}
 
 # ==================== جيزي ====================
@@ -395,33 +743,45 @@ def dj_request_otp(phone):
     params = {'msisdn': phone, 'client_id': DJ_CLIENT_ID, 'scope': "smsotp"}
     payload = {"consent-agreement": [{"marketing-notifications": False}], "is-consent": True}
     for ua in ["MobileApp/3.0.7", "MobileApp/3.0.0", "okhttp/4.12.0"]:
-        h = DJ_HEADERS.copy(); h['User-Agent'] = ua
+        h = DJ_HEADERS.copy()
+        h['User-Agent'] = ua
         r = _dz_req("POST", url, headers=h, params=params, json_body=payload, timeout=15)
-        if r is None: time.sleep(0.5); continue
-        if r.status_code == 200: return True
-        if r.status_code in (429, 400): return False
+        if r is None:
+            time.sleep(0.5)
+            continue
+        if r.status_code == 200:
+            return True
+        if r.status_code in (429, 400):
+            return False
         time.sleep(0.5)
     return False
 
 def dj_verify_otp(phone, otp):
     url = f"{DJ_BASE}/oauth2/token"
     clean = ''.join(filter(str.isdigit, otp))
-    if len(clean) != 6: return None
+    if len(clean) != 6:
+        return None
     payload = {'otp': clean, 'mobileNumber': phone, 'scope': "djezzyAppV2",
                'client_id': DJ_CLIENT_ID, 'client_secret': DJ_CLIENT_SECRET, 'grant_type': "mobile"}
-    h = DJ_HEADERS.copy(); h['Content-Type'] = "application/x-www-form-urlencoded"
+    h = DJ_HEADERS.copy()
+    h['Content-Type'] = "application/x-www-form-urlencoded"
     last_status = 0
     for attempt in range(OTP_VERIFY_MAX_RETRY):
         if attempt > 0:
             time.sleep(OTP_VERIFY_MIN_WAIT)
         r = _dz_req("POST", url, headers=h, data=payload, timeout=25)
-        if r is None: continue
+        if r is None:
+            continue
         last_status = r.status_code
         if r.status_code == 200:
-            try: return r.json().get('access_token')
-            except: return None
-        if r.status_code == 429: return None
-    if last_status == 401: return "EXPIRED"
+            try:
+                return r.json().get('access_token')
+            except:
+                return None
+        if r.status_code == 429:
+            return None
+    if last_status == 401:
+        return "EXPIRED"
     return None
 
 def dj_check_balance(token, phone):
@@ -431,23 +791,28 @@ def dj_check_balance(token, phone):
     url = f"{DJ_BASE}/api/v1/subscribers/main-balance/{phone}"
     for attempt in range(2):
         r = _dz_req("GET", url, headers=h, timeout=15)
-        if r is None: continue
+        if r is None:
+            continue
         if r.status_code == 200:
             try:
                 data = r.json().get("data", r.json())
                 return {"status": "SUCCESS",
                         "balance": float(data.get("mainBalance", 0) or 0),
                         "due": float(data.get("due", 0) or 0)}
-            except: return {"status": "FAILED", "balance": 0, "due": 0}
-        if r.status_code == 401: return {"status": "EXPIRED", "balance": 0, "due": 0}
+            except:
+                return {"status": "FAILED", "balance": 0, "due": 0}
+        if r.status_code == 401:
+            return {"status": "EXPIRED", "balance": 0, "due": 0}
         time.sleep(1)
     return {"status": "FAILED", "balance": 0, "due": 0}
 
 def dj_extract_price(p):
     try:
         m = re.search(r'(\d+)', str(p))
-        if m: return int(m.group(1))
-    except: pass
+        if m:
+            return int(m.group(1))
+    except:
+        pass
     return None
 
 def dj_activate_2gb(token, phone):
@@ -461,32 +826,102 @@ def dj_activate_2gb(token, phone):
     ]
     last_code = 0
     for url in endpoints:
-        r = _dz_req("POST", url, headers=h,
-                    json_body={"packageCode": "GIFTWALKWIN2GO"}, timeout=20)
-        if r is None: continue
+        r = _dz_req("POST", url, headers=h, json_body={"packageCode": "GIFTWALKWIN2GO"}, timeout=20)
+        if r is None:
+            continue
         last_code = r.status_code
-        if r.status_code == 401: return "EXPIRED"
+        if r.status_code == 401:
+            return "EXPIRED"
         if r.status_code in (200, 201):
-            try: body = r.text.lower()
-            except: body = ""
-            if "already" in body: return "LIMIT"
+            try:
+                body = r.text.lower()
+            except:
+                body = ""
+            if "already" in body:
+                return "LIMIT"
             return "SUCCESS"
-        if r.status_code == 402: return "NO_BALANCE"
-        if r.status_code == 429: return "RATE_LIMIT"
+        if r.status_code == 402:
+            return "NO_BALANCE"
+        if r.status_code == 429:
+            return "RATE_LIMIT"
         time.sleep(0.3)
-    if last_code == 403: return "NOT_ALLOWED"
+    if last_code == 403:
+        return "NOT_ALLOWED"
     return "FAILED"
 
+def dj_activate_72gb_scan(token, phone):
+    """فحص مسبق + تفعيل + كشف 'مفعّل مسبقاً'"""
+    # 1) فحص DB السريع
+    db_check = dz_check_72gb_status(phone)
+    if db_check["status"] == "ACTIVE":
+        return "LIMIT"
+
+    h = DJ_HEADERS.copy()
+    h['Authorization'] = f"Bearer {token}"
+    h['User-Agent'] = "MobileApp/3.0.9"
+
+    # 2) فحص المنتجات النشطة (إن توفر endpoint)
+    try:
+        if _check_72gb_in_active_products(token, phone):
+            dz_mark_72gb_activated(phone)
+            return "LIMIT"
+    except:
+        pass
+
+    # 3) التفعيل
+    url = f"{DJ_BASE}/api/v1/services/scan/activate-reward/{phone}"
+    payload = {"qrCode": DJ_72GB_QR_CODE}
+
+    try:
+        r = _dz_req("POST", url, headers=h, json_body=payload, timeout=20)
+        if r is None:
+            return "FAILED"
+
+        logging.info(f"[DJ-72GB] {phone} → HTTP {r.status_code} | {(r.text or '')[:200]}")
+
+        if r.status_code == 401:
+            return "EXPIRED"
+
+        body = (r.text or "").lower()
+
+        already_kw = ["already", "déjà", "deja", "مفعل", "activated",
+                      "duplicate", "exist", "limit reached", "déjà activé"]
+        if any(kw in body for kw in already_kw):
+            dz_mark_72gb_activated(phone)
+            return "LIMIT"
+
+        if r.status_code in (200, 201):
+            dz_mark_72gb_activated(phone)
+            return "SUCCESS"
+
+        if r.status_code == 402:
+            return "NO_BALANCE"
+
+        if r.status_code == 429:
+            _rotate_proxy_session(force=True)
+            return "RATE_LIMIT"
+
+        if r.status_code >= 500:
+            return "SERVER_BUSY"
+
+        return "FAILED"
+    except Exception as e:
+        logging.warning(f"[DJ-72GB] {phone}: {e}")
+        return "FAILED"
+
 async def dz_activate_paid_offer_async(token, phone, package_code, offer_type, offer_name, price):
-    h = DZ_HEADERS.copy(); h['Authorization'] = f"Bearer {token}"
+    h = DZ_HEADERS.copy()
+    h['Authorization'] = f"Bearer {token}"
     async def _try_post(url, label):
         r = await safe_request('POST', url, json={"packageCode": package_code}, headers=h, timeout=12)
-        if r['status'] == 401: return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك اعد إرسال رقمك"}
+        if r['status'] == 401:
+            return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك اعد إرسال رقمك"}
         if r['status'] in [200, 201, 202]:
             return {"success": True, "token_expired": False, "msg": f"✅ ━━━ تم التفعيل بنجاح ━━━\n\n🎉 {offer_name}\n💰 السعر: {price} د.ج\n\n{PAGE_FOLLOW_TEXT}"}
         if r['status'] == 402:
             return {"success": False, "token_expired": False, "msg": f"❌ رصيدك غير كافي لتفعيل {offer_name}\n💰 المطلوب: {price} د.ج"}
-        srv = dz_extract_msg(r['json']); code = r.get('status', '?')
+        srv = dz_extract_msg(r['json'])
+        code = r.get('status', '?')
         info = srv if srv else f"كود: {code}"
         return {"success": False, "token_expired": False, "msg": f"⚠️ تعذر تفعيل {offer_name}\n\nℹ️ {info}"}
     if offer_type == "shake":
@@ -495,85 +930,104 @@ async def dz_activate_paid_offer_async(token, phone, package_code, offer_type, o
             res_get = await safe_request('GET', shake_url, headers=h, timeout=8)
             if res_get['status'] == 401:
                 return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك اعد إرسال رقمك"}
-            if res_get['status'] == 200: break
+            if res_get['status'] == 200:
+                break
             await asyncio.sleep(0.3)
         r_post = await _try_post(shake_url, "shake")
         if not r_post.get("success") and not r_post.get("token_expired"):
             fb = await _try_post(f"{DZ_BASE_URL}/api/v1/subscribers/activate-product/{phone}", "fb")
-            if fb.get("success") or fb.get("token_expired"): return fb
+            if fb.get("success") or fb.get("token_expired"):
+                return fb
         return r_post
     return await _try_post(f"{DZ_BASE_URL}/api/v1/subscribers/activate-product/{phone}", "activate")
 
 async def dz_activate_offer_70_4g_async(token, phone):
-    h = DZ_HEADERS.copy(); h['Authorization'] = f"Bearer {token}"
+    h = DZ_HEADERS.copy()
+    h['Authorization'] = f"Bearer {token}"
     async def _try_post(url, label):
         r = await safe_request('POST', url, json={"packageCode": "BTLINTSPEEDDAY2GO"}, headers=h, timeout=12)
-        if r.get('status') == 401: return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك"}
+        if r.get('status') == 401:
+            return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك"}
         if r.get('status') in [200, 201, 202]:
             return {"success": True, "token_expired": False, "msg": f"✅ ━━━ تم التفعيل بنجاح ━━━\n\n🟢 عرض: 4 جيجابايت\n💰 السعر: 70 د.ج\n⏱️ الصلاحية: 24 ساعة\n\n{PAGE_FOLLOW_TEXT}"}
-        if r.get('status') == 402: return {"success": False, "token_expired": False, "msg": "❌ رصيدك غير كافٍ"}
+        if r.get('status') == 402:
+            return {"success": False, "token_expired": False, "msg": "❌ رصيدك غير كافٍ"}
         srv = dz_extract_msg(r.get('json'))
-        _st = r.get('status', '?')
-        _info = srv if srv else f"كود: {_st}"
-        return {"success": False, "token_expired": False, "msg": f"⚠️ تعذر التفعيل\nℹ️ {_info}"}
+        return {"success": False, "token_expired": False, "msg": f"⚠️ تعذر التفعيل\nℹ️ {srv or r.get('status', '?')}"}
     shake_url = f"{DZ_BASE_URL}/api/v1/services/shake/{phone}"
     for _ in range(3):
         res_get = await safe_request('GET', shake_url, headers=h, timeout=8)
-        if res_get.get('status') == 401: return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك"}
-        if res_get.get('status') == 200: break
+        if res_get.get('status') == 401:
+            return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك"}
+        if res_get.get('status') == 200:
+            break
         await asyncio.sleep(0.5)
     r_post = await _try_post(shake_url, "shake")
     if not r_post.get("success") and not r_post.get("token_expired"):
         fb = await _try_post(f"{DZ_BASE_URL}/api/v1/subscribers/activate-product/{phone}", "fb")
-        if fb.get("success") or fb.get("token_expired"): return fb
+        if fb.get("success") or fb.get("token_expired"):
+            return fb
     return r_post
 
 async def dz_activate_offer_90_5g_async(token, phone):
-    h = DZ_HEADERS.copy(); h['Authorization'] = f"Bearer {token}"
+    h = DZ_HEADERS.copy()
+    h['Authorization'] = f"Bearer {token}"
     async def _try_post(url, label):
         r = await safe_request('POST', url, json={"packageCode": "BTL500MBDAY"}, headers=h, timeout=12)
-        if r.get('status') == 401: return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك"}
+        if r.get('status') == 401:
+            return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك"}
         if r.get('status') in [200, 201, 202]:
             return {"success": True, "token_expired": False, "msg": f"✅ ━━━ تم التفعيل بنجاح ━━━\n\n🟣 عرض: 5 جيجابايت\n💰 السعر: 90 د.ج\n⏱️ الصلاحية: 24 ساعة\n\n{PAGE_FOLLOW_TEXT}"}
-        if r.get('status') == 402: return {"success": False, "token_expired": False, "msg": "❌ رصيدك غير كافٍ"}
+        if r.get('status') == 402:
+            return {"success": False, "token_expired": False, "msg": "❌ رصيدك غير كافٍ"}
         srv = dz_extract_msg(r.get('json'))
-        _st = r.get('status', '?')
-        _info = srv if srv else f"كود: {_st}"
-        return {"success": False, "token_expired": False, "msg": f"⚠️ تعذر التفعيل\nℹ️ {_info}"}
+        return {"success": False, "token_expired": False, "msg": f"⚠️ تعذر التفعيل\nℹ️ {srv or r.get('status', '?')}"}
     shake_url = f"{DZ_BASE_URL}/api/v1/services/shake/{phone}"
     for _ in range(3):
         res_get = await safe_request('GET', shake_url, headers=h, timeout=8)
-        if res_get.get('status') == 401: return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك"}
-        if res_get.get('status') == 200: break
+        if res_get.get('status') == 401:
+            return {"success": False, "token_expired": True, "msg": "⚠️ انتهت جلستك"}
+        if res_get.get('status') == 200:
+            break
         await asyncio.sleep(0.5)
     r_post = await _try_post(shake_url, "shake")
     if not r_post.get("success") and not r_post.get("token_expired"):
         fb = await _try_post(f"{DZ_BASE_URL}/api/v1/subscribers/activate-product/{phone}", "fb")
-        if fb.get("success") or fb.get("token_expired"): return fb
+        if fb.get("success") or fb.get("token_expired"):
+            return fb
     return r_post
 
 # ==================== أوريدو ====================
 def _now_ms(): return str(int(time.time() * 1000))
 def _iid(): return str(uuid.uuid4()) + _now_ms()
+
 def _pld(x):
     return base64.b64encode(json.dumps({"platform":"android","is-physical-device":True,"device-id":x},
                                        separators=(",",":")).encode()).decode()
+
 def _fp(): return os.urandom(32).hex()
 def _corr(): return str(uuid.uuid4()) + str(int(time.time() * 100))
+
 def _exdid(at):
     try:
-        p = at.split("."); pad = len(p[1]) % 4
+        p = at.split(".")
+        pad = len(p[1]) % 4
         return json.loads(base64.b64decode(p[1] + "="*(4-pad) if pad else p[1])).get("device-id")
-    except: return None
+    except:
+        return None
+
 def _mps(at):
     d = _exdid(at) or _iid()
     return base64.b64encode(json.dumps({"platform":"android","is-physical-device":True,
                                         "device-id":d},separators=(",",":")).encode()).decode()
 
 def oo_quick_detect(at):
-    rp = ""; is_yooz = False; is_dima = False
+    rp = ""
+    is_yooz = False
+    is_dima = False
     try:
-        p = at.split("."); pad = len(p[1]) % 4
+        p = at.split(".")
+        pad = len(p[1]) % 4
         payload = json.loads(base64.b64decode(p[1] + "=" * (4 - pad) if pad else p[1]))
         rp_code = str(payload.get("ratePlan") or "")
         if rp_code in RATE_PLAN_NAMES:
@@ -581,7 +1035,8 @@ def oo_quick_detect(at):
             rp_up = rp.upper().replace("'", "").replace(" ", "")
             is_dima = "DIMA" in rp_up
             is_yooz = "YOOZ" in rp_up
-    except: pass
+    except:
+        pass
     return {"rate_plan": rp, "is_yooz": is_yooz, "is_dima": is_dima}
 
 def _base_hdrs(msisdn, iid_val, psig, corr, ts, fp=None):
@@ -601,41 +1056,90 @@ def _web_hdrs(msisdn, at, meta, ct=""):
          "platform":"web","x-version":X_VERSION,"x-signature":X_SIG,
          "x-platform-data-signature":psig,"x-timestamp":ts,"x-instance-id":iid_val,
          "origin":"https://my.ooredoo.dz","referer":"https://my.ooredoo.dz/"}
-    if ct: h["content-type"] = ct
+    if ct:
+        h["content-type"] = ct
     return h
 
-def ooredoo_send_otp_sync(msisdn):
-    ts = _now_ms(); iid_val = _iid(); psig = _pld(iid_val); fp = _fp()
-    device = {"instance_id": iid_val, "plat_sig": psig, "fp": fp}
-    nonce, chronos = "", ""
-    try:
-        h3 = _base_hdrs(msisdn, iid_val, psig, _corr(), ts, fp=fp)
-        h3["x-version"] = X_VERSION_OTP
-        h3.update({"content-type": "application/json; charset=utf-8",
-                   "x-native-integrity-token": INTEGRITY_1,
-                   "x-path": "/api/auth/realms/myooredoo/protocol/openid-connect/token",
-                   "x-method": "POST"})
-        _, rh3, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h3, b"{}", timeout=20)
-        nonce = rh3.get("x-nonce-id") or rh3.get("X-Nonce-Id") or ""
-        chronos = rh3.get("x-chronos-id") or rh3.get("X-Chronos-Id") or ""
-    except: pass
-    try:
-        h4 = {"User-Agent":"Dart/3.11 (dart:io)","Accept-Encoding":"gzip","x-msisdn":msisdn,
-              "x-device-fingerprint":fp,"x-platform-origin":"mobile-android",
-              "platform":"android","x-version":X_VERSION_OTP,"x-signature":X_SIG,
-              "x-timestamp":ts,"x-platform-info":psig,"x-force-update":"true",
-              "x-instance-id":iid_val,"content-type":"application/x-www-form-urlencoded"}
-        if nonce: h4["x-nonce-id"] = nonce
-        if chronos: h4["x-chronos-id"] = chronos
-        body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}"
-        c4, _, _ = _oo_req("POST", OO_AUTH, h4, body, timeout=30)
-        if c4 == 429: return {"device": device, "otp_sent": False, "status": 429, "reason": "rate_limit"}
-        if c4 == 0: return {"device": device, "otp_sent": False, "status": 0, "reason": "network"}
-        return {"device": device, "otp_sent": True, "status": c4}
-    except Exception as e:
-        return {"device": device, "otp_sent": False, "status": -1, "reason": "exception"}
+def ooredoo_send_otp_sync(msisdn, uid):
+    tried = set()
+    for attempt in range(6):
+        proxy_str = _get_oo_proxy_for_user(uid, exclude=tried)
+        if not proxy_str or proxy_str in tried:
+            break
+        tried.add(proxy_str)
 
-def ooredoo_verify_otp_sync(msisdn, otp, device):
+        ts = _now_ms()
+        iid_val = _iid()
+        psig = _pld(iid_val)
+        fp = _fp()
+        device = {"instance_id": iid_val, "plat_sig": psig, "fp": fp, "proxy_str": proxy_str}
+        nonce, chronos = "", ""
+
+        try:
+            h3 = _base_hdrs(msisdn, iid_val, psig, _corr(), ts, fp=fp)
+            h3["x-version"] = X_VERSION_OTP
+            h3.update({"content-type": "application/json; charset=utf-8",
+                       "x-native-integrity-token": INTEGRITY_1,
+                       "x-path": "/api/auth/realms/myooredoo/protocol/openid-connect/token",
+                       "x-method": "POST"})
+            r3 = _oo_req_with_proxy("POST", f"{OO_BFF}/checkpoint/token", h3, b"{}",
+                                    timeout=12, proxy_str=proxy_str)
+            if r3 is None:
+                _release_oo_proxy(uid, reason="checkpoint_fail")
+                continue
+            _, rh3, _ = r3
+            nonce = rh3.get("x-nonce-id") or rh3.get("X-Nonce-Id") or ""
+            chronos = rh3.get("x-chronos-id") or rh3.get("X-Chronos-Id") or ""
+        except Exception as e:
+            logging.error(f"[OO-OTP] checkpoint: {e}")
+            _release_oo_proxy(uid, reason="checkpoint_exc")
+            continue
+
+        try:
+            h4 = {"User-Agent":"Dart/3.11 (dart:io)","Accept-Encoding":"gzip","x-msisdn":msisdn,
+                  "x-device-fingerprint":fp,"x-platform-origin":"mobile-android",
+                  "platform":"android","x-version":X_VERSION_OTP,"x-signature":X_SIG,
+                  "x-timestamp":ts,"x-platform-info":psig,"x-force-update":"true",
+                  "x-instance-id":iid_val,"content-type":"application/x-www-form-urlencoded"}
+            if nonce:
+                h4["x-nonce-id"] = nonce
+            if chronos:
+                h4["x-chronos-id"] = chronos
+            body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}"
+            r4 = _oo_req_with_proxy("POST", OO_AUTH, h4, body, timeout=25, proxy_str=proxy_str)
+            if r4 is None:
+                _release_oo_proxy(uid, reason="otp_fail")
+                continue
+            c4, _, _ = r4
+            logging.info(f"[OO-OTP] {msisdn} uid={uid} proxy={_mask_oo_proxy(proxy_str)} → {c4}")
+
+            if c4 in (200, 401):
+                return {"device": device, "otp_sent": True, "status": c4}
+
+            if c4 == 403:
+                _mark_oo_proxy_fail(proxy_str, "forbidden")
+                _release_oo_proxy(uid, reason="403_send")
+                continue
+
+            if c4 == 429:
+                _release_oo_proxy(uid, reason="rate_limit")
+                return {"device": device, "otp_sent": False, "status": 429, "reason": "rate_limit"}
+
+            _mark_oo_proxy_fail(proxy_str, f"http{c4}")
+            _release_oo_proxy(uid, reason=f"http{c4}")
+            continue
+        except Exception as e:
+            logging.error(f"[OO-OTP] send: {e}")
+            _mark_oo_proxy_fail(proxy_str, "exception")
+            _release_oo_proxy(uid, reason="exception")
+            continue
+
+    _release_oo_proxy(uid, reason="all_failed")
+    return {"device": {"instance_id": _iid(), "plat_sig": "", "fp": _fp(), "proxy_str": None},
+            "otp_sent": False, "status": -1, "reason": "all_proxies_failed"}
+
+def ooredoo_verify_otp_sync(msisdn, otp, device, uid):
+    proxy_str = device.get("proxy_str")
     iid_val = device.get("instance_id") or _iid()
     psig = device.get("plat_sig") or _pld(iid_val)
     fp_otp = device.get("fp") or _fp()
@@ -649,19 +1153,29 @@ def ooredoo_verify_otp_sync(msisdn, otp, device):
             h6.update({"content-type":"application/json; charset=utf-8",
                        "x-native-integrity-token":INTEGRITY_2,
                        "x-path":"/api/auth/realms/myooredoo/protocol/openid-connect/token","x-method":"POST"})
-            _, rh6, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h6, b"{}", timeout=15)
+            r6 = _oo_req_with_proxy("POST", f"{OO_BFF}/checkpoint/token", h6, b"{}",
+                                    timeout=12, proxy_str=proxy_str)
+            if r6 is None:
+                return 0, {}
+            _, rh6, _ = r6
             nonce = rh6.get("x-nonce-id") or rh6.get("X-Nonce-Id") or ""
             chronos = rh6.get("x-chronos-id") or rh6.get("X-Chronos-Id") or ""
-        except: pass
+        except:
+            pass
         h7 = {"User-Agent":"Dart/3.11 (dart:io)","Accept-Encoding":"gzip","x-msisdn":msisdn,
               "x-device-fingerprint":fp_otp,"x-platform-origin":"mobile-android",
               "platform":"android","x-version":X_VERSION_OTP,"x-signature":X_SIG,
               "x-timestamp":ts,"x-platform-info":psig,"x-force-update":"true",
               "x-instance-id":iid_val,"content-type":"application/x-www-form-urlencoded"}
-        if nonce: h7["x-nonce-id"] = nonce
-        if chronos: h7["x-chronos-id"] = chronos
+        if nonce:
+            h7["x-nonce-id"] = nonce
+        if chronos:
+            h7["x-chronos-id"] = chronos
         body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}&otp={otp}"
-        c7, _, j7 = _oo_req("POST", OO_AUTH, h7, body, timeout=30)
+        r7 = _oo_req_with_proxy("POST", OO_AUTH, h7, body, timeout=25, proxy_str=proxy_str)
+        if r7 is None:
+            return 0, {}
+        c7, _, j7 = r7
         return c7, j7
 
     last_status = 0
@@ -671,69 +1185,130 @@ def ooredoo_verify_otp_sync(msisdn, otp, device):
         try:
             c7, j7 = _one_attempt()
             last_status = c7
+            logging.info(f"[OO-VERIFY] {msisdn} uid={uid} proxy={_mask_oo_proxy(proxy_str)} attempt {attempt+1} → {c7}")
             if c7 == 200 and isinstance(j7, dict) and "access_token" in j7:
                 at = j7["access_token"]
+                _release_oo_proxy(uid, reason="verify_ok")
                 return {"access_token": at, "refresh_token": j7.get("refresh_token",""),
                         "expires_in": j7.get("expires_in", 0), "tok_fingerprint": fp_otp,
                         "tok_instance_id": _exdid(at) or iid_val, "tok_plat_sig": _mps(at),
                         "tok_timestamp": _now_ms(), "issued_at": int(time.time())}
             if c7 == 429:
+                _release_oo_proxy(uid, reason="rate_limit")
                 return None
-        except Exception as e:
+            if c7 == 0:
+                continue
+        except:
             continue
+
+    _release_oo_proxy(uid, reason="verify_failed")
     if last_status in (400, 401, 403):
         return "wrong_otp"
     return None
 
-def ooredoo_refresh_token_sync(msisdn, rt, device):
-    iid_val = device.get("instance_id") or _iid(); psig = device.get("plat_sig") or _pld(iid_val)
-    fp_otp = device.get("fp") or _fp(); ts = _now_ms()
-    h = _base_hdrs(msisdn, iid_val, psig, _corr(), ts, fp=fp_otp)
-    h.update({"content-type":"application/x-www-form-urlencoded",
-              "x-native-integrity-token":INTEGRITY_1,
-              "x-path":"/api/auth/realms/myooredoo/protocol/openid-connect/token","x-method":"POST"})
-    _, rh, _ = _oo_req("POST", f"{OO_BFF}/checkpoint/token", h, b"{}", timeout=15)
-    nonce = rh.get("x-nonce-id") or rh.get("X-Nonce-Id") or ""
-    chronos = rh.get("x-chronos-id") or rh.get("X-Chronos-Id") or ""
-    if not nonce or not chronos: return None
-    h2 = {"User-Agent":"Dart/3.11 (dart:io)","Accept-Encoding":"gzip","x-msisdn":msisdn,
-          "x-device-fingerprint":fp_otp,"x-nonce-id":nonce,"x-platform-origin":"mobile-android",
-          "platform":"android","x-version":X_VERSION,"x-signature":X_SIG,"x-chronos-id":chronos,
-          "x-timestamp":ts,"x-platform-info":psig,"x-force-update":"true","x-instance-id":iid_val,
-          "content-type":"application/x-www-form-urlencoded"}
-    body = f"client_id={OO_CLIENT}&grant_type=refresh_token&refresh_token={rt}"
-    c2, _, j2 = _oo_req("POST", OO_AUTH, h2, body, timeout=30)
-    if c2 == 200 and "access_token" in j2:
-        at = j2["access_token"]
-        return {"access_token": at, "refresh_token": j2.get("refresh_token", rt),
-                "expires_in": j2.get("expires_in", 0),
-                "tok_instance_id": _exdid(at) or iid_val, "tok_plat_sig": _mps(at),
-                "tok_fingerprint": fp_otp, "tok_timestamp": _now_ms(), "issued_at": int(time.time())}
+def ooredoo_refresh_token_sync(msisdn, rt, device, uid):
+    iid_val = device.get("instance_id") or _iid()
+    psig = device.get("plat_sig") or _pld(iid_val)
+    fp_otp = device.get("fp") or _fp()
+    ts = _now_ms()
+
+    tried = set()
+    for _ in range(3):
+        proxy_str = _get_oo_proxy_for_user(uid, exclude=tried)
+        if not proxy_str or proxy_str in tried:
+            break
+        tried.add(proxy_str)
+
+        h = _base_hdrs(msisdn, iid_val, psig, _corr(), ts, fp=fp_otp)
+        h.update({"content-type":"application/x-www-form-urlencoded",
+                  "x-native-integrity-token":INTEGRITY_1,
+                  "x-path":"/api/auth/realms/myooredoo/protocol/openid-connect/token","x-method":"POST"})
+        r = _oo_req_with_proxy("POST", f"{OO_BFF}/checkpoint/token", h, b"{}", timeout=12, proxy_str=proxy_str)
+        if r is None:
+            _release_oo_proxy(uid, "refresh_proxy_fail")
+            continue
+        _, rh, _ = r
+        nonce = rh.get("x-nonce-id") or rh.get("X-Nonce-Id") or ""
+        chronos = rh.get("x-chronos-id") or rh.get("X-Chronos-Id") or ""
+        if not nonce or not chronos:
+            _release_oo_proxy(uid, "refresh_no_nonce")
+            continue
+
+        h2 = {"User-Agent":"Dart/3.11 (dart:io)","Accept-Encoding":"gzip","x-msisdn":msisdn,
+              "x-device-fingerprint":fp_otp,"x-nonce-id":nonce,"x-platform-origin":"mobile-android",
+              "platform":"android","x-version":X_VERSION,"x-signature":X_SIG,"x-chronos-id":chronos,
+              "x-timestamp":ts,"x-platform-info":psig,"x-force-update":"true","x-instance-id":iid_val,
+              "content-type":"application/x-www-form-urlencoded"}
+        body = f"client_id={OO_CLIENT}&grant_type=refresh_token&refresh_token={rt}"
+        r2 = _oo_req_with_proxy("POST", OO_AUTH, h2, body, timeout=20, proxy_str=proxy_str)
+        _release_oo_proxy(uid, "refresh_done")
+        if r2 is None:
+            continue
+        c2, _, j2 = r2
+        if c2 == 200 and isinstance(j2, dict) and "access_token" in j2:
+            at = j2["access_token"]
+            return {"access_token": at, "refresh_token": j2.get("refresh_token", rt),
+                    "expires_in": j2.get("expires_in", 0),
+                    "tok_instance_id": _exdid(at) or iid_val, "tok_plat_sig": _mps(at),
+                    "tok_fingerprint": fp_otp, "tok_timestamp": _now_ms(), "issued_at": int(time.time())}
+        if c2 == 401:
+            return None
     return None
 
-def oo_check_balance(msisdn, at, meta):
+def oo_check_balance(msisdn, at, meta, uid):
     h = _web_hdrs(msisdn, at, meta)
-    c, _, resp = _oo_req("GET", f"{OO_BFF}/subscriptions/getAccountInfo", h, timeout=20)
-    if c == 200: return {"status": "ok", "data": resp if isinstance(resp, dict) else {}}
-    if c == 401: return {"status": "unauthorized"}
+    c, _, resp = _oo_req("GET", f"{OO_BFF}/subscriptions/getAccountInfo", h, timeout=20, uid=uid)
+    if c == 200:
+        return {"status": "ok", "data": resp if isinstance(resp, dict) else {}}
+    if c == 401:
+        return {"status": "unauthorized"}
     return {"status": "error", "code": c}
 
-def oo_get_active(msisdn, at, meta):
+def oo_get_active(msisdn, at, meta, uid):
     h = _web_hdrs(msisdn, at, meta)
-    c, _, resp = _oo_req("GET", f"{OO_BFF}/bundle/getActivePackages?msisdn={msisdn}", h, timeout=20)
-    if c == 200: return {"status": "ok", "data": resp if isinstance(resp, dict) else {}}
-    if c == 401: return {"status": "unauthorized"}
+    c, _, resp = _oo_req("GET", f"{OO_BFF}/bundle/getActivePackages?msisdn={msisdn}", h, timeout=20, uid=uid)
+    if c == 200:
+        return {"status": "ok", "data": resp if isinstance(resp, dict) else {}}
+    if c == 401:
+        return {"status": "unauthorized"}
     return {"status": "error", "code": c}
 
-def oo_activate_snapchat(msisdn, at, meta):
+def oo_activate_snapchat(msisdn, at, meta, uid):
     h = _web_hdrs(msisdn, at, meta)
-    c, _, _ = _oo_req("POST", f"{OO_BFF}/snap-chat/apply", h, timeout=20)
-    if c == 200: return "ok"
-    if c == 500: return "already_active"
-    if c == 401: return "unauthorized"
+    c, _, _ = _oo_req("POST", f"{OO_BFF}/snap-chat/apply", h, timeout=20, uid=uid)
+    if c == 200:
+        return "ok"
+    if c == 500:
+        return "already_active"
+    if c == 401:
+        return "unauthorized"
     return "error"
 
-def oo_purchase_20dzd_1go(msisdn, at, meta):
+def oo_check_72gb_status(msisdn, at, meta, uid):
+    h = _web_hdrs(msisdn, at, meta)
+    h["x-version"] = "1.5.17"
+    c, _, resp = _oo_req("GET", f"{OO_BFF}/gamification/status", h, timeout=15, uid=uid)
+    if c == 200 and isinstance(resp, dict):
+        return {"status": "ok", "data": resp}
+    if c == 401:
+        return {"status": "unauthorized"}
+    return {"status": "error", "code": c}
+
+def oo_claim_72gb(msisdn, at, meta, uid):
+    h = _web_hdrs(msisdn, at, meta, "application/json; charset=utf-8")
+    h["x-version"] = "1.5.17"
+    for url in [
+        f"{OO_BFF}/gamification/play",
+        f"{OO_BFF}/gamification/claim",
+        f"{OO_BFF}/gamification/reward",
+        f"{OO_BFF}/gamification/play-and-win",
+    ]:
+        c, _, resp = _oo_req("POST", url, h, json.dumps({}), timeout=15, uid=uid)
+        if c in (200, 201):
+            return {"status": "ok", "data": resp, "endpoint": url}
+    return {"status": "error"}
+
+def oo_purchase_20dzd_1go(msisdn, at, meta, uid):
     body = json.dumps({"bundleCode": "BTL_24H_DATA_20DZD_1Go", "validity": "day", "validityAmount": "1"},
                       separators=(",", ":"))
     iid_val = meta.get("tok_instance_id") or _iid()
@@ -741,90 +1316,62 @@ def oo_purchase_20dzd_1go(msisdn, at, meta):
     fp = meta.get("tok_fingerprint") or _fp()
     def _mobile_hdrs(v):
         return {"x-msisdn": msisdn, "user-agent": "Dart/3.11 (dart:io)",
-            "x-device-fingerprint": fp, "accept-encoding": "gzip",
-            "x-platform-origin": "mobile-android", "authorization": f"Bearer {at}",
-            "x-correlation-id": _corr(), "content-type": "application/json; charset=utf-8",
-            "platform": "android", "x-version": v, "x-signature": X_SIG,
-            "accept": "*/*", "x-platform-data-signature": psig,
-            "x-timestamp": _now_ms(), "x-instance-id": iid_val}
-    def _do(method, url, h, data=b"", t=20):
-        try:
-            s = _new_session(use_proxy=True)
-            d = data if isinstance(data, bytes) else (data.encode() if isinstance(data, str) else data)
-            r = s.request(method, url, headers=h, data=d, timeout=t, allow_redirects=False)
-            try: b = r.json()
-            except: b = {"_raw": r.text[:500]}
-            return r.status_code, dict(r.headers), b
-        except Exception as e:
-            return 0, {}, {"_error": str(e)[:100]}
-    try: _do("GET", f"{OO_BFF}/subscriptions/getAccountInfo", _web_hdrs(msisdn, at, meta), b"", 12)
-    except: pass
-    c = 0; resp = {}
+                "x-device-fingerprint": fp, "accept-encoding": "gzip",
+                "x-platform-origin": "mobile-android", "authorization": f"Bearer {at}",
+                "x-correlation-id": _corr(), "content-type": "application/json; charset=utf-8",
+                "platform": "android", "x-version": v, "x-signature": X_SIG,
+                "accept": "*/*", "x-platform-data-signature": psig,
+                "x-timestamp": _now_ms(), "x-instance-id": iid_val}
+    try:
+        _oo_req("GET", f"{OO_BFF}/subscriptions/getAccountInfo",
+                _web_hdrs(msisdn, at, meta), timeout=12, uid=uid)
+    except:
+        pass
+    c = 0
+    resp = {}
     for label, h in [("mobile v1.5.16", _mobile_hdrs("1.5.16")),
                      ("mobile v1.5.15", _mobile_hdrs("1.5.15"))]:
-        c, _, resp = _do("POST", f"{OO_BFF}/cvm/bundlePurchase", h, body, 30)
-        if c in (200, 201): return {"status": "ok", "data": resp}
-        if c in (402, 409): break
+        c, _, resp = _oo_req("POST", f"{OO_BFF}/cvm/bundlePurchase",
+                             h, body, timeout=25, uid=uid)
+        logging.info(f"[OO-20DZD-1GO] {msisdn} uid={uid} [{label}] → {c}")
+        if c in (200, 201):
+            return {"status": "ok", "data": resp}
+        if c in (402, 409):
+            break
     if c in (402, 409):
         srv_code = str(resp.get("code") or "").upper() if isinstance(resp, dict) else ""
-        if any(k in srv_code for k in ("CREDIT", "BALANCE", "NOT_ENOUGH")): return {"status": "no_balance"}
-        if "ALREADY" in srv_code: return {"status": "already"}
-        if any(k in srv_code for k in ("NOT_AVAILABLE", "NOT_ALLOWED")): return {"status": "not_allowed"}
+        if any(k in srv_code for k in ("CREDIT", "BALANCE", "NOT_ENOUGH")):
+            return {"status": "no_balance"}
+        if "ALREADY" in srv_code:
+            return {"status": "already"}
+        if any(k in srv_code for k in ("NOT_AVAILABLE", "NOT_ALLOWED")):
+            return {"status": "not_allowed"}
         return {"status": "no_balance"}
-    if c == 401: return {"status": "purchase_blocked"}
+    if c == 401:
+        return {"status": "purchase_blocked"}
     return {"status": "error", "code": c}
 
-# ==================== 🎁 72GB Gamification ====================
-def oo_check_72gb_status(msisdn, at, meta):
-    h = _web_hdrs(msisdn, at, meta)
-    h["x-version"] = "1.5.17"
-    url = f"{OO_BFF}/gamification/status"
-    c, _, resp = _oo_req("GET", url, h, timeout=15)
-    if c == 200 and isinstance(resp, dict):
-        return {"status": "ok", "data": resp}
-    if c == 401: 
-        return {"status": "unauthorized"}
-    return {"status": "error", "code": c}
-
-def oo_claim_72gb(msisdn, at, meta):
-    h = _web_hdrs(msisdn, at, meta, "application/json; charset=utf-8")
-    h["x-version"] = "1.5.17"
-    endpoints = [
-        f"{OO_BFF}/gamification/play",
-        f"{OO_BFF}/gamification/claim",
-        f"{OO_BFF}/gamification/reward",
-        f"{OO_BFF}/gamification/play-and-win"
-    ]
-    body = json.dumps({})
-    for url in endpoints:
-        c, _, resp = _oo_req("POST", url, h, body, timeout=15)
-        if c in (200, 201):
-            return {"status": "ok", "data": resp, "endpoint": url}
-    return {"status": "error"}
-
-def oo_purchase_free_2gb(msisdn, at, meta):
+def oo_purchase_free_2gb(msisdn, at, meta, uid):
     body_simple = json.dumps({"bundleCode": "BTL_24H_DATA_Free_2Go"}, separators=(",", ":"))
     body_full = json.dumps({"bundleCode": "BTL_24H_DATA_Free_2Go",
                             "validity": "day", "validityAmount": "1"}, separators=(",", ":"))
     endpoints = [
-        ("bundlePurchase", f"{OO_BFF}/cvm/bundlePurchase"),
-        ("dynamic-bundle", f"{OO_BFF}/cvm/dynamic-bundle-purchase"),
+        f"{OO_BFF}/cvm/bundlePurchase",
+        f"{OO_BFF}/cvm/dynamic-bundle-purchase",
     ]
-    bodies = [("simple", body_simple), ("full", body_full)]
-    def _try(url, body, label):
-        try:
-            h = _web_hdrs(msisdn, at, meta, "application/json; charset=utf-8")
-            c, _, resp = _oo_req("POST", url, h, body, timeout=30, use_proxy=True)
-            return c, resp
-        except Exception as e:
-            return 0, {"_error": str(e)[:100]}
+    bodies = [body_simple, body_full]
     already_seen = None
     for round_idx in range(2):
         if round_idx > 0:
             time.sleep(2)
-        for ep_label, url in endpoints:
-            for body_label, body in bodies:
-                c, resp = _try(url, body, f"r{round_idx+1}|{ep_label}|{body_label}")
+        for ep_label, url in enumerate(endpoints):
+            for body_label, body in enumerate(bodies):
+                try:
+                    h = _web_hdrs(msisdn, at, meta, "application/json; charset=utf-8")
+                    c, _, resp = _oo_req("POST", url, h, body, timeout=25, uid=uid)
+                    logging.info(f"[OO-FREE-2GB] {msisdn} uid={uid} r{round_idx+1}/{ep_label}/{body_label} → {c}")
+                except Exception as e:
+                    c, resp = 0, {"_error": str(e)[:100]}
                 if c in (200, 201):
                     return {"status": "ok", "data": resp}
                 resp_str = str(resp).lower()
@@ -841,65 +1388,84 @@ def oo_purchase_free_2gb(msisdn, at, meta):
     return {"status": "error", "data": None}
 
 # ==================== Sessions ====================
-def oo_save(uid, d): (SESSIONS_DIR / f"oo_{uid}.json").write_text(json.dumps(d, ensure_ascii=False))
+def oo_save(uid, d):
+    (SESSIONS_DIR / f"oo_{uid}.json").write_text(json.dumps(d, ensure_ascii=False))
+
 def oo_load(uid):
     f = SESSIONS_DIR / f"oo_{uid}.json"
     return json.loads(f.read_text()) if f.exists() else None
+
 def oo_clear(uid):
     f = SESSIONS_DIR / f"oo_{uid}.json"
-    if f.exists(): f.unlink()
+    if f.exists():
+        f.unlink()
 
 def dz_save_session(uid, phone, token):
-    try: (SESSIONS_DIR / f"dz_{uid}.json").write_text(json.dumps({"phone": phone, "token": token, "issued_at": time.time()}, ensure_ascii=False))
-    except: pass
-def dz_load_session(uid):
     try:
-        f = SESSIONS_DIR / f"dz_{uid}.json"
-        return json.loads(f.read_text()) if f.exists() else None
-    except: return None
+        (SESSIONS_DIR / f"dz_{uid}.json").write_text(json.dumps({"phone": phone, "token": token, "issued_at": time.time()}, ensure_ascii=False))
+    except:
+        pass
+
 def dz_clear_session(uid):
     try:
         f = SESSIONS_DIR / f"dz_{uid}.json"
-        if f.exists(): f.unlink()
-    except: pass
+        if f.exists():
+            f.unlink()
+    except:
+        pass
 
 def oo_free2gb_save(uid, msisdn):
     try:
         (SESSIONS_DIR / f"free2gb_{uid}.json").write_text(
             json.dumps({"msisdn": msisdn, "last": time.time()}, ensure_ascii=False))
-    except: pass
+    except:
+        pass
 
 def oo_free2gb_get_last(uid, msisdn):
     try:
         f = SESSIONS_DIR / f"free2gb_{uid}.json"
-        if not f.exists(): return 0
+        if not f.exists():
+            return 0
         d = json.loads(f.read_text())
         if d.get("msisdn") == msisdn:
             return d.get("last", 0)
-    except: pass
+    except:
+        pass
     return 0
 
 def oo_free2gb_clear(uid):
     try:
         f = SESSIONS_DIR / f"free2gb_{uid}.json"
-        if f.exists(): f.unlink()
-    except: pass
+        if f.exists():
+            f.unlink()
+    except:
+        pass
 
 def o_mask(m):
-    if not m: return "?"
-    if len(m) >= 6: return m[:4] + "xxxx" + m[-2:]
+    if not m:
+        return "?"
+    if len(m) >= 6:
+        return m[:4] + "xxxx" + m[-2:]
     return m
-def dz_mask(m): return "0" + m[3:] if m.startswith("213") else m
+
+def dz_mask(m):
+    return "0" + m[3:] if m.startswith("213") else m
 
 def oo_ensure_valid(uid, user):
-    if not user or not user.get("access_token"): return None
-    issued = user.get("issued_at", 0); exp = user.get("expires_in", 0)
-    if issued and exp and (time.time() - issued) < (exp - 1800): return user
+    if not user or not user.get("access_token"):
+        return None
+    issued = user.get("issued_at", 0)
+    exp = user.get("expires_in", 0)
+    if issued and exp and (time.time() - issued) < (exp - 1800):
+        return user
     ref = ooredoo_refresh_token_sync(user["msisdn"], user.get("refresh_token",""),
-        {"instance_id": user.get("tok_instance_id"), "plat_sig": user.get("tok_plat_sig"),
-         "fp": user.get("tok_fingerprint")})
+                                     {"instance_id": user.get("tok_instance_id"),
+                                      "plat_sig": user.get("tok_plat_sig"),
+                                      "fp": user.get("tok_fingerprint")}, uid)
     if ref:
-        user.update(ref); oo_save(uid, user); return user
+        user.update(ref)
+        oo_save(uid, user)
+        return user
     return None
 
 _stop_threads = threading.Event()
@@ -911,14 +1477,19 @@ def oo_auto_refresh():
             for f in list(SESSIONS_DIR.glob("oo_*.json")):
                 try:
                     uid_s = f.stem.replace("oo_", "")
-                    if not uid_s.isdigit(): continue
+                    if not uid_s.isdigit():
+                        continue
                     u = oo_load(int(uid_s))
-                    if not u or not u.get("access_token"): continue
-                    issued = u.get("issued_at", 0); exp = u.get("expires_in", 0)
+                    if not u or not u.get("access_token"):
+                        continue
+                    issued = u.get("issued_at", 0)
+                    exp = u.get("expires_in", 0)
                     if issued and exp and (time.time() - issued) >= (exp - 600):
                         oo_ensure_valid(int(uid_s), u)
-                except: pass
-        except: pass
+                except:
+                    pass
+        except:
+            pass
 
 def dz_auto_refresh():
     while not _stop_threads.is_set():
@@ -927,18 +1498,24 @@ def dz_auto_refresh():
             for f in list(SESSIONS_DIR.glob("dz_*.json")):
                 try:
                     uid_s = f.stem.replace("dz_", "")
-                    if not uid_s.isdigit(): continue
-                    s = dz_load_session(int(uid_s))
-                    if not s: continue
+                    if not uid_s.isdigit():
+                        continue
+                    s = json.loads(f.read_text())
                     st = dj_check_balance(s["token"], s["phone"])
-                    if isinstance(st, dict) and st.get("status") == "EXPIRED": dz_clear_session(int(uid_s))
-                except: pass
-        except: pass
+                    if isinstance(st, dict) and st.get("status") == "EXPIRED":
+                        dz_clear_session(int(uid_s))
+                except:
+                    pass
+        except:
+            pass
 
 def steps_saver_worker():
     while not _stop_threads.is_set():
-        try: time.sleep(30); save_steps()
-        except: pass
+        try:
+            time.sleep(30)
+            save_steps()
+        except:
+            pass
 
 def reset_steps_worker():
     while not _stop_threads.is_set():
@@ -951,14 +1528,32 @@ def reset_steps_worker():
                 if _last_otp_sent[k] < cutoff:
                     _last_otp_sent.pop(k, None)
             save_steps()
-        except: pass
+        except:
+            pass
 
 def _proxy_proactive_rotate():
     while not _stop_threads.is_set():
         try:
             time.sleep(25 * 60)
             _rotate_proxy_session(force=True)
-        except: pass
+        except:
+            pass
+
+def oo_proxy_cleaner():
+    while not _stop_threads.is_set():
+        try:
+            time.sleep(60)
+            now = time.time()
+            expired = []
+            with _oo_proxy_lock:
+                for u, p in list(_oo_user_to_proxy.items()):
+                    info = _oo_proxy_in_use.get(p)
+                    if info and (now - info["since"]) >= OO_PROXY_HOLD_SECONDS:
+                        expired.append(u)
+            for u in expired:
+                _release_oo_proxy(u, reason="timeout")
+        except:
+            pass
 
 def oo_auto_claim_72gb_worker():
     while not _stop_threads.is_set():
@@ -967,57 +1562,61 @@ def oo_auto_claim_72gb_worker():
             for f in list(SESSIONS_DIR.glob("oo_*.json")):
                 try:
                     uid_s = f.stem.replace("oo_", "")
-                    if not uid_s.isdigit(): continue
+                    if not uid_s.isdigit():
+                        continue
                     uid = int(uid_s)
                     u = oo_load(uid)
-                    if not u or not u.get("access_token"): continue
-                    ms = u["msisdn"]; at = u["access_token"]
+                    if not u or not u.get("access_token"):
+                        continue
+                    ms = u["msisdn"]
+                    at = u["access_token"]
                     meta = {k: u.get(k, "") for k in ["tok_instance_id","tok_plat_sig","tok_fingerprint","tok_timestamp"]}
-                    
-                    r = oo_check_72gb_status(ms, at, meta)
+                    r = oo_check_72gb_status(ms, at, meta, uid)
                     if r.get("status") == "ok":
                         d = r.get("data", {})
-                        played = d.get("played", True)
-                        enable = d.get("gameUIEnable", False)
-                        if enable and not played:
-                            logging.info(f"[AUTO-72GB] Trying to claim for {ms}...")
-                            claim = oo_claim_72gb(ms, at, meta)
+                        if d.get("gameUIEnable", False) and not d.get("played", True):
+                            claim = oo_claim_72gb(ms, at, meta, uid)
                             if claim.get("status") == "ok":
                                 inc_stat("oo_72gb")
-                                logging.info(f"[AUTO-72GB] SUCCESS for {ms} via {claim.get('endpoint')}")
+                                _mark_oo_proxy_success(uid)
                                 if MAIN_EVENT_LOOP:
                                     asyncio.run_coroutine_threadsafe(
-                                        bot.send_message(uid, "🎉 <b>مبروك!</b>\n\n✅ تم تفعيل عرض 72 جيجا أوتوماتيكياً في الخلفية لرقمك!\n\n💡 اطلب <code>*200#</code> باش تتأكد.", parse_mode='HTML'),
-                                        MAIN_EVENT_LOOP
-                                    )
-                except: pass
-        except: pass
+                                        bot.send_message(uid, "🎉 ━━━━━━━━━━━━━━━━ 🎉\n       ✅ <b>مبروك!</b>\n🎉 ━━━━━━━━━━━━━━━━ 🎉\n\n✅ تم تفعيل <b>72 جيجا</b> أوتوماتيكياً في الخلفية!\n\n💡 <code>*200#</code> باش تتأكد.", parse_mode='HTML'),
+                                        MAIN_EVENT_LOOP)
+                except:
+                    pass
+        except:
+            pass
 
 # ==================== نصوص ====================
 WELCOME_HEADER = ("مرحبا بك في موح بوت 👋\n\n"
-    "بوت موح يقدم تفعيل عروض انترنت في مختلف الشبكات الجزائرية 🇩🇿\n\n"
-    "1️⃣ • أدخل الرقم 📱\n2️⃣ • أكمل الخطوات ✅\n"
-    "3️⃣ • إختر عرض مناسب 🛒\n4️⃣ • انتظار الرد ... 🔍")
+                  "بوت موح يقدم تفعيل عروض انترنت في مختلف الشبكات الجزائرية 🇩🇿\n\n"
+                  "1️⃣ • أدخل الرقم 📱\n2️⃣ • أكمل الخطوات ✅\n"
+                  "3️⃣ • إختر عرض مناسب 🛒\n4️⃣ • انتظار الرد ... 🔍")
 WELCOME_FOOTER = "للبدء أرسل رقم هاتفك 📱"
 OTP_MSG = ("✅ <b>تم إرسال الرمز بنجاح</b>\n\n"
-           "يرجى نسخ أو كتابة الرمز المكون من 6 أرقام الذي تلقيته في رسالة على هاتفك 📱\n\n"
-           "⏳ <i>إذا لم يصلك، انتظر <b>دقيقة واحدة</b> قبل إعادة الطلب</i>")
+           "أدخل الرمز المكون من 6 أرقام 📱\n\n"
+           "⏳ <i>إذا لم يصلك، انتظر <b>دقيقة</b> قبل إعادة الطلب</i>")
 
 async def send_welcome(cid):
     try:
         await bot.send_message(cid, WELCOME_HEADER)
         await bot.send_message(cid, WELCOME_FOOTER)
-    except: pass
+    except:
+        pass
 
 async def check_subscription(user_id):
     try:
         m = await bot.get_chat_member(REQUIRED_CHANNEL, user_id)
         return m.status not in ['left', 'kicked']
-    except: return True
+    except:
+        return True
 
 async def typing(cid):
-    try: await bot.send_chat_action(cid, 'typing')
-    except: pass
+    try:
+        await bot.send_chat_action(cid, 'typing')
+    except:
+        pass
 
 def _otp_can_resend(uid):
     last = _last_otp_sent.get(uid, 0)
@@ -1028,32 +1627,42 @@ def _otp_can_resend(uid):
 
 async def send_otp_message(cid, display, full, markup=None):
     _last_otp_sent[cid] = time.time()
-    try: await bot.send_sticker(cid, PHONE_STICKER)
-    except: pass
-    try: await bot.send_message(cid, OTP_MSG, reply_markup=markup, parse_mode='HTML')
-    except: pass
+    try:
+        await bot.send_sticker(cid, PHONE_STICKER)
+    except:
+        pass
+    try:
+        await bot.send_message(cid, OTP_MSG, reply_markup=markup, parse_mode='HTML')
+    except:
+        pass
 
 def back_btn(cb="main_menu"):
-    m = InlineKeyboardMarkup(); m.add(InlineKeyboardButton("↩️ رجوع", callback_data=cb)); return m
+    m = InlineKeyboardMarkup()
+    m.add(InlineKeyboardButton("↩️ رجوع", callback_data=cb))
+    return m
 
 async def send_result(uid, text, back_cb="main_menu"):
-    try: await bot.send_sticker(uid, PHONE_STICKER)
-    except: pass
+    try:
+        await bot.send_sticker(uid, PHONE_STICKER)
+    except:
+        pass
     try:
         await bot.send_message(uid, text, reply_markup=back_btn(back_cb), parse_mode='HTML')
     except Exception as e:
-        if "Forbidden" in str(e): logging.warning(f"[USER-BLOCKED] {uid}")
-        else: logging.error(f"[SEND-RESULT] {uid}: {e}")
+        if "Forbidden" in str(e):
+            logging.warning(f"[USER-BLOCKED] {uid}")
 
 async def notify_group_success(offer_name, network):
-    if not NOTIFY_GROUP: return
+    if not NOTIFY_GROUP:
+        return
     try:
         text = (f"✅ <b>تفعيل ناجح</b>\n━━━━━━━━━━━━━━━━\n"
                 f"🌐 <b>الشبكة:</b> {network}\n"
                 f"🎁 <b>العرض:</b> {offer_name}\n"
                 f"⏱️ <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}")
         await bot.send_message(NOTIFY_GROUP, text, parse_mode='HTML')
-    except Exception as e: logging.error(f"[NOTIFY-GROUP] {e}")
+    except Exception as e:
+        logging.error(f"[NOTIFY-GROUP] {e}")
 
 def subscription_markup():
     m = InlineKeyboardMarkup(row_width=1)
@@ -1073,9 +1682,9 @@ AVAILABLE_OFFERS = {
     "BTLINTSPEEDDAY2Go": {"name": "📱 70 Da - 4GB - 24H","price": "70 دج","validity": "24 ساعة","data": "4 جيجا"},
 }
 
-# ==================== Menus ====================
 def main_menu_markup(user_id=None):
     m = InlineKeyboardMarkup(row_width=1)
+    m.add(InlineKeyboardButton("🔥 72 جيجا (أول نوفمبر)", callback_data="dz_quick_72gb"))
     m.add(InlineKeyboardButton("🎉 تفعيل 2 جيجا (أسبوعي)", callback_data="activate_2gb"))
     m.add(InlineKeyboardButton("🐷 كم هو رصيدي؟", callback_data="check_balance"))
     m.add(InlineKeyboardButton("🌐 عروض الإنترنت", callback_data="show_all_offers"))
@@ -1108,20 +1717,22 @@ def get_stats_text():
     s = db_query("""SELECT total_2gb,total_3gb,total_offers,
                     oo_logins,oo_snap,oo_spins,oo_balance,dz_logins,
                     oo_soccer_enrolls,oo_20dzd_1go,oo_gift_plays,
-                    oo_gift_won,oo_gifts_total,oo_free_2gb,oo_72gb
+                    oo_gift_won,oo_gifts_total,oo_free_2gb,oo_72gb,dz_72gb
                     FROM stats WHERE id=1""", fetch=True)
-    if not s: s = (0,)*15
-    while len(s) < 15: s = s + (0,)
+    if not s:
+        s = (0,) * 16
+    while len(s) < 16:
+        s = s + (0,)
     users = db_query("SELECT COUNT(*) FROM users", fetch=True)[0] or 0
     dz = db_query("SELECT COUNT(*) FROM numbers", fetch=True)[0] or 0
-    return (f"📊 <b>الإحصائيات</b>\n👥 {users} | 📱 {dz}\n\n"
-            f"🔴 جيزي:\n"
-            f"  🎁 2G أسبوعي: {s[0]}\n"
-            f"  💰 العروض: {s[2]}\n\n"
-            f"🟠 أوريدو:\n  🔐: {s[3]}  👻: {s[4]}\n"
-            f"  ⚡ 20دج-1Go: {s[9]}\n"
-            f"  🎁 2Go FREE: {s[13]}\n"
-            f"  🔥 72Go: {s[14]}")
+    with _oo_proxy_lock:
+        used = len(_oo_proxy_in_use)
+        banned = sum(1 for h in _oo_proxy_health.values() if h.get("banned_until", 0) > time.time())
+    return (f"📊 <b>الإحصائيات</b>\n👥 {users} | 📱 {dz}\n"
+            f"🔌 Proxies: {used}/{len(OO_PROXY_POOL)} | 🚫 {banned}\n\n"
+            f"🔴 جيزي:\n  🔥 72G نوفمبر: {s[15]}\n  🎁 2G أسبوعي: {s[0]}\n  💰 العروض: {s[2]}\n\n"
+            f"🟠 أوريدو (تحت الصيانة):\n  🔐: {s[3]}  👻: {s[4]}\n"
+            f"  ⚡ 20دج-1Go: {s[9]}\n  🎁 2Go FREE: {s[13]}\n  🔥 72Go: {s[14]}")
 
 def oo_dynamic_menu(services, uid=None):
     m = InlineKeyboardMarkup(row_width=1)
@@ -1130,7 +1741,7 @@ def oo_dynamic_menu(services, uid=None):
     m.add(InlineKeyboardButton("👻 سناب", callback_data="oo_snap"))
     m.add(InlineKeyboardButton("⚡ 20 دج — 1Go — 24H", callback_data="oo_quick_20_1g"))
     m.add(InlineKeyboardButton("🎁 2 جيجا مجاني — 24H", callback_data="oo_quick_free_2gb"))
-    m.add(InlineKeyboardButton("🔥 72 جيجا (أول نوفمبر)", callback_data="oo_quick_72gb"))
+    m.add(InlineKeyboardButton("🔥 72 جيجا", callback_data="oo_quick_72gb"))
     m.add(InlineKeyboardButton("🔄 تغيير الرقم", callback_data="oo_change"))
     m.add(InlineKeyboardButton("🗑️ حذف الرقم المحفوظ", callback_data="delete_my_number"))
     if uid and uid == ADMIN_ID:
@@ -1148,21 +1759,24 @@ def admin_menu_markup():
     return m
 
 async def _dz_request_new_otp(uid, phone):
-    display = dz_mask(phone); loading_msg = None
+    display = dz_mask(phone)
     ok2, remaining = _otp_can_resend(uid)
     if not ok2:
         mm = InlineKeyboardMarkup()
         mm.add(InlineKeyboardButton("🔄 إعادة إرسال", callback_data=f"resend_otp_{phone}"))
-        await bot.send_message(uid,
-            f"⏳ <b>انتظر قليلاً</b>\n\n💡 يمكنك إعادة الطلب بعد <b>{remaining}</b> ثانية",
-            reply_markup=mm, parse_mode='HTML')
+        await bot.send_message(uid, f"⏳ <b>انتظر {remaining} ثانية</b>", reply_markup=mm, parse_mode='HTML')
         return
-    try: loading_msg = await bot.send_message(uid, "⏳ جاري إرسال رمز جديد...")
-    except: pass
+    loading_msg = None
+    try:
+        loading_msg = await bot.send_message(uid, "⏳ جاري إرسال رمز جديد...")
+    except:
+        pass
     ok = await asyncio.to_thread(dj_request_otp, phone)
     if loading_msg:
-        try: await bot.delete_message(uid, loading_msg.message_id)
-        except: pass
+        try:
+            await bot.delete_message(uid, loading_msg.message_id)
+        except:
+            pass
     if ok:
         mm = InlineKeyboardMarkup()
         mm.add(InlineKeyboardButton("🔄 إعادة إرسال", callback_data=f"resend_otp_{phone}"))
@@ -1170,218 +1784,364 @@ async def _dz_request_new_otp(uid, phone):
         user_steps[uid] = {"step": "dz_verify_otp", "phone": phone, "display": display, "last_activity": time.time()}
     else:
         await bot.send_message(uid,
-            f"⚠️ <b>انتهت الجلسة</b>\n\n📱 <code>{display}</code>\n\n❌ تعذر إرسال رمز تلقائياً",
+            f"⚠️ <b>انتهت الجلسة</b>\n📱 <code>{display}</code>",
             reply_markup=back_btn("main_menu"), parse_mode='HTML')
 
 async def show_dz_balance(uid, phone):
     row = db_query("SELECT token FROM numbers WHERE phone=? AND user_id=?", (phone, uid), fetch=True)
     if not row or not row[0] or row[0] == "EXPIRED":
-        await _dz_request_new_otp(uid, phone); return
+        await _dz_request_new_otp(uid, phone)
+        return
     result = await asyncio.to_thread(dj_check_balance, row[0], phone)
     if result.get("status") == "EXPIRED":
         db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=? AND user_id=?", (phone, uid))
-        await _dz_request_new_otp(uid, phone); return
+        await _dz_request_new_otp(uid, phone)
+        return
     if result.get("status") == "FAILED":
-        await bot.send_message(uid, "❌ <b>تعذر جلب الرصيد</b>\n\n💡 جرّب بعد دقيقة",
-            reply_markup=back_btn("main_menu"), parse_mode='HTML'); return
-    bal = result.get("balance", 0)
-    text = f"💳 <b>رصيد الرقم</b>\n\n📱 <code>{dz_mask(phone)}</code>\n━━━━━━━━━━━━━━━\n💰 <b>الرصيد: {bal} دج</b>"
-    await bot.send_message(uid, text, reply_markup=back_btn("main_menu"), parse_mode='HTML')
+        await bot.send_message(uid, "❌ <b>تعذر جلب الرصيد</b>", reply_markup=back_btn("main_menu"), parse_mode='HTML')
+        return
+    await bot.send_message(uid,
+        f"💳 <b>رصيد</b>\n📱 <code>{dz_mask(phone)}</code>\n💰 <b>{result.get('balance', 0)} دج</b>",
+        reply_markup=back_btn("main_menu"), parse_mode='HTML')
 
 async def dz_process(uid, phone, action):
     row = db_query("SELECT token FROM numbers WHERE phone=? AND user_id=?", (phone, uid), fetch=True)
     if not row or row[0] == "EXPIRED":
-        await _dz_request_new_otp(uid, phone); return
+        await _dz_request_new_otp(uid, phone)
+        return
     token = row[0]
-    
+
     if action == "2gb":
         last = db_query("SELECT last_activation_2gb FROM numbers WHERE phone=?", (phone,), fetch=True)[0] or 0
         p = time.time() - last
         if p < COOLDOWN_2GB:
-            r = int(COOLDOWN_2GB - p); d = r // 86400; h = (r % 86400) // 3600
-            await bot.send_message(uid, f"❌ لم تكمل أسبوع\n⏱️ {d} ي {h} س", reply_markup=back_btn("main_menu")); return
+            r = int(COOLDOWN_2GB - p)
+            d = r // 86400
+            h = (r % 86400) // 3600
+            await bot.send_message(uid, f"❌ لم تكمل أسبوع\n⏱️ {d} ي {h} س", reply_markup=back_btn("main_menu"))
+            return
         res = await asyncio.to_thread(dj_activate_2gb, token, phone)
         if res == "SUCCESS":
             db_query("UPDATE numbers SET last_activation_2gb=? WHERE phone=?", (time.time(), phone))
             inc_stat("total_2gb")
             await notify_group_success("2GB أسبوعي", "Djezzy 🔴")
             await send_result(uid,
-                f"✅ <b>تم التفعيل بنجاح</b> 🎉\n\n"
-                f"📱 <code>{dz_mask(phone)}</code>\n"
-                f"🎁 <b>2 جيجا</b> — أسبوع\n\n"
-                f"💡 اطلب <code>*200#</code> باش تتأكد",
-                "main_menu")
+                f"🎉 ━━━━━━━━━━━━━━━━ 🎉\n"
+                f"       ✅ <b>تم التفعيل بنجاح</b>\n"
+                f"🎉 ━━━━━━━━━━━━━━━━ 🎉\n\n"
+                f"🎁 <b>العرض:</b> 2 جيجا أنترنت\n"
+                f"📱 <b>الرقم:</b> <code>{dz_mask(phone)}</code>\n"
+                f"⏱️ <b>الصلاحية:</b> أسبوع\n"
+                f"💰 <b>السعر:</b> مجاناً\n\n"
+                f"━━━━━━━━━━━━━━━━━━━\n"
+                f"📞 تحقق من رصيدك: <code>*200#</code>\n\n"
+                f"📢 {CHANNEL_LINK}", "main_menu")
         elif res == "EXPIRED":
             db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (phone,))
-            await _dz_request_new_otp(uid, phone); return
+            await _dz_request_new_otp(uid, phone)
         elif res == "LIMIT":
-            await bot.send_message(uid,
-                "⏰ <b>راك مفعّل 2 جيجا من قبل</b>\n\n"
-                "🎁 العرض: 2 جيجا — أسبوع\n\n"
-                "💡 ما تقدرش تفعّلو مرتين، انتظر يخلص العرض\n"
-                "📞 اطلب <code>*200#</code> باش تتأكد من الباقة",
-                reply_markup=back_btn("main_menu"), parse_mode='HTML')
+            await bot.send_message(uid, "⏰ <b>راك مفعّل 2 جيجا من قبل</b>", reply_markup=back_btn("main_menu"), parse_mode='HTML')
         elif res == "NO_BALANCE":
-            await bot.send_message(uid, "❌ رصيد غير كافي (يلزم رصيد رمزي)",
-                reply_markup=back_btn("main_menu"))
+            await bot.send_message(uid, "❌ رصيد غير كافي", reply_markup=back_btn("main_menu"))
         elif res == "RATE_LIMIT":
-            await bot.send_message(uid, "🚫 تجاوزت الحد المسموح، جرّب بعد دقائق",
-                reply_markup=back_btn("main_menu"))
+            await bot.send_message(uid, "🚫 تجاوزت الحد", reply_markup=back_btn("main_menu"))
         elif res == "NOT_ALLOWED":
-            await bot.send_message(uid, "🚫 العرض غير متاح لرقمك",
-                reply_markup=back_btn("main_menu"))
+            await bot.send_message(uid, "🚫 العرض غير متاح لرقمك", reply_markup=back_btn("main_menu"))
         else:
-            await bot.send_message(uid, f"❌ فشل التفعيل ({res})",
-                reply_markup=back_btn("main_menu"))
+            await bot.send_message(uid, f"❌ فشل ({res})", reply_markup=back_btn("main_menu"))
+        return
+
+    elif action == "dz_72gb":
+        # 🧠 فحص 1: مفعّل مؤخراً؟
+        check = dz_check_72gb_status(phone)
+        if check["status"] == "ACTIVE":
+            remaining = int(check["expires_in"])
+            hh, mm = remaining // 3600, (remaining % 3600) // 60
+            await bot.send_message(uid,
+                f"⏰ ━━━━━━━━━━━━━━━━ ⏰\n"
+                f"   <b>العرض مفعّل مسبقاً</b>\n"
+                f"⏰ ━━━━━━━━━━━━━━━━ ⏰\n\n"
+                f"📱 <code>{dz_mask(phone)}</code>\n"
+                f"🎁 72 جيجا\n"
+                f"⏳ متبقي: <b>{hh}س {mm}د</b>\n\n"
+                f"💡 تحقق: <code>*200#</code>",
+                reply_markup=back_btn("main_menu"), parse_mode='HTML')
+            return
+
+        # 🧠 فحص 2: قفل ضد الضغط المتزامن
+        if not _try_acquire_72gb_slot(uid):
+            await bot.send_message(uid,
+                "⏳ <b>محاولة جارية من طرف آخر...</b>\nانتظر ثانية",
+                parse_mode='HTML')
+            return
+
+        try:
+            loading = await bot.send_message(uid,
+                "⚡ ━━━━━━━━━━━━━━━━ ⚡\n"
+                "  <b>جاري التفعيل الفوري</b>\n"
+                "⚡ ━━━━━━━━━━━━━━━━ ⚡\n\n"
+                "🔍 فحص التفعيل السابق...\n"
+                "📡 محاولة التفعيل...\n\n"
+                "<i>لا تغلق البوت</i>",
+                parse_mode='HTML')
+
+            # 🎯 محاولتان سريعتان مباشرتان
+            res = "FAILED"
+            for attempt in range(2):
+                res = await asyncio.to_thread(_acquire_and_activate_72gb, token, phone)
+                if res in ("SUCCESS", "LIMIT", "EXPIRED", "NO_BALANCE"):
+                    break
+                if attempt == 0:
+                    try:
+                        await bot.edit_message_text(
+                            "⚡ ━━━━━━━━━━━━━━━━ ⚡\n"
+                            "   <b>محاولة ثانية...</b>\n"
+                            "⚡ ━━━━━━━━━━━━━━━━ ⚡\n\n"
+                            "🔄 تدوير البروكسي\n"
+                            "📡 إعادة المحاولة...",
+                            chat_id=uid, message_id=loading.message_id,
+                            parse_mode='HTML')
+                    except:
+                        pass
+                    _rotate_proxy_session(force=True)
+                    await asyncio.sleep(2)
+
+            try:
+                await bot.delete_message(uid, loading.message_id)
+            except:
+                pass
+
+            # ===== النتائج النهائية =====
+            if res == "SUCCESS":
+                inc_stat("dz_72gb")
+                await notify_group_success("72 جيجا (Scan & Win)", "Djezzy 🔴")
+                await send_result(uid,
+                    f"🎉 ━━━━━━━━━━━━━━━━ 🎉\n"
+                    f"       ✅ <b>تم التفعيل بنجاح</b>\n"
+                    f"🎉 ━━━━━━━━━━━━━━━━ 🎉\n\n"
+                    f"🎁 <b>العرض:</b> 72 جيجا أنترنت\n"
+                    f"📱 <b>الرقم:</b> <code>{dz_mask(phone)}</code>\n"
+                    f"⏱️ <b>الصلاحية:</b> 3 أيام\n"
+                    f"💰 <b>السعر:</b> مجاناً (عرض نوفمبر)\n\n"
+                    f"━━━━━━━━━━━━━━━━━━━\n"
+                    f"📞 تحقق: <code>*200#</code>\n\n"
+                    f"📢 {CHANNEL_LINK}", "main_menu")
+
+            elif res == "LIMIT":
+                await bot.send_message(uid,
+                    f"⏰ ━━━━━━━━━━━━━━━━ ⏰\n"
+                    f"  <b>العرض مفعّل من قبل</b>\n"
+                    f"⏰ ━━━━━━━━━━━━━━━━ ⏰\n\n"
+                    f"📱 <code>{dz_mask(phone)}</code>\n"
+                    f"🎁 72 جيجا نشط حالياً\n\n"
+                    f"💡 <code>*200#</code> للتأكد",
+                    reply_markup=back_btn("main_menu"), parse_mode='HTML')
+
+            elif res == "EXPIRED":
+                db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (phone,))
+                await _dz_request_new_otp(uid, phone)
+
+            elif res == "NO_BALANCE":
+                await bot.send_message(uid,
+                    "❌ <b>رصيد غير كافي</b>",
+                    reply_markup=back_btn("main_menu"), parse_mode='HTML')
+
+            else:
+                # ❌ فشل — إعادة محاولة يدوية فقط
+                kb = InlineKeyboardMarkup(row_width=2)
+                kb.add(
+                    InlineKeyboardButton("🔄 إعادة المحاولة", callback_data="dz_quick_72gb"),
+                    InlineKeyboardButton("↩️ رجوع", callback_data="main_menu")
+                )
+                await bot.send_message(uid,
+                    f"❌ ━━━━━━━━━━━━━━━━ ❌\n"
+                    f"      <b>تعذّر التفعيل الآن</b>\n"
+                    f"❌ ━━━━━━━━━━━━━━━━ ❌\n\n"
+                    f"📱 <code>{dz_mask(phone)}</code>\n"
+                    f"⚠️ السيرفر مزدحم حالياً\n\n"
+                    f"💡 <b>اضغط «إعادة المحاولة» بعد 10 ثواني</b>\n"
+                    f"⏱️ لا داعي للانتظار في الخلفية",
+                    reply_markup=kb, parse_mode='HTML')
+        finally:
+            _release_72gb_slot(uid)
         return
 
 async def send_dz_menu(uid, phone=None):
     if not phone:
         nums = db_query("SELECT phone FROM numbers WHERE user_id=? ORDER BY added_date DESC LIMIT 1", (uid,), fetchall=True)
-        if nums and nums[0]: phone = nums[0][0]
-    if phone: txt = f"📱 الرقم : <code>{dz_mask(phone)}</code> ✅\n🔴 الشبكة : <b>جيزي</b>\n\nاختر العرض 🔽"
-    else: txt = "🔴 اختر العرض 🔽"
-    try: await bot.send_message(uid, txt, reply_markup=main_menu_markup(uid), parse_mode='HTML')
+        if nums and nums[0]:
+            phone = nums[0][0]
+    txt = f"📱 <code>{dz_mask(phone)}</code> ✅\n🔴 <b>جيزي</b>\n\nاختر العرض 🔽" if phone else "🔴 اختر العرض 🔽"
+    try:
+        await bot.send_message(uid, txt, reply_markup=main_menu_markup(uid), parse_mode='HTML')
     except Exception as e:
-        if "Forbidden" in str(e): logging.warning(f"[USER-BLOCKED] {uid}")
-        else: logging.error(f"[DZ-MENU] {uid}: {e}")
+        if "Forbidden" in str(e):
+            logging.warning(f"[USER-BLOCKED] {uid}")
 
 async def send_oo_menu(uid, user):
-    ms = user["msisdn"]; at = user["access_token"]
+    ms = user["msisdn"]
+    at = user["access_token"]
     qd = oo_quick_detect(at)
     services = {"rate_plan": qd.get("rate_plan") or "", "is_yooz": qd.get("is_yooz", False),
-        "is_dima": qd.get("is_dima", False), "balance_value": 0, "gift_count": 0}
+                "is_dima": qd.get("is_dima", False), "balance_value": 0, "gift_count": 0}
     rp = services.get("rate_plan") or ""
-    lines = [f"📱 الرقم : <code>{o_mask(ms)}</code> ✅"]
-    if rp: lines.append(f"📦 العرض : <b>{rp}</b>")
-    lines.append(f"💰 الرصيد : <b>...</b>"); lines.append(""); lines.append("اختر الخدمة 🔽")
+    lines = [f"📱 <code>{o_mask(ms)}</code> ✅"]
+    if rp:
+        lines.append(f"📦 {rp}")
+    lines.append("💰 <b>...</b>\n\nاختر الخدمة 🔽")
     try:
         msg = await bot.send_message(uid, "\n".join(lines), reply_markup=oo_dynamic_menu(services, uid), parse_mode='HTML')
         asyncio.create_task(_update_oo_menu_bg(uid, user, msg.message_id))
     except Exception as e:
-        if "Forbidden" in str(e): logging.warning(f"[USER-BLOCKED] {uid}")
+        if "Forbidden" in str(e):
+            logging.warning(f"[USER-BLOCKED] {uid}")
 
 async def _update_oo_menu_bg(uid, user, msg_id):
     try:
-        ms = user["msisdn"]; at = user["access_token"]
+        ms = user["msisdn"]
+        at = user["access_token"]
         meta = {k: user.get(k, "") for k in ["tok_instance_id","tok_plat_sig","tok_fingerprint","tok_timestamp"]}
-        bal_r = await asyncio.to_thread(oo_check_balance, ms, at, meta)
+        bal_r = await asyncio.to_thread(oo_check_balance, ms, at, meta, uid)
         bal = 0
         if bal_r.get("status") == "ok":
-            try: bal = float(bal_r.get("data", {}).get("accountBalance", 0) or 0)
-            except: pass
+            try:
+                bal = float(bal_r.get("data", {}).get("accountBalance", 0) or 0)
+            except:
+                pass
         rp = (oo_quick_detect(at).get("rate_plan") or "")
-        lines = [f"📱 الرقم : <code>{o_mask(ms)}</code> ✅"]
-        if rp: lines.append(f"📦 العرض : <b>{rp}</b>")
-        lines.append(f"💰 الرصيد : <b>{bal} دج</b>")
-        lines.append(""); lines.append("اختر الخدمة 🔽")
+        lines = [f"📱 <code>{o_mask(ms)}</code> ✅"]
+        if rp:
+            lines.append(f"📦 {rp}")
+        lines.append(f"💰 <b>{bal} دج</b>\n\nاختر الخدمة 🔽")
         svc = {"rate_plan": rp, "is_yooz": oo_quick_detect(at).get("is_yooz", False),
                "is_dima": oo_quick_detect(at).get("is_dima", False), "balance_value": bal, "gift_count": 0}
         await bot.edit_message_text("\n".join(lines), chat_id=uid, message_id=msg_id,
-            reply_markup=oo_dynamic_menu(svc, uid), parse_mode='HTML')
-    except: pass
+                                    reply_markup=oo_dynamic_menu(svc, uid), parse_mode='HTML')
+    except:
+        pass
 
-# ==================== 📋 Admin Log Commands ====================
+# ==================== Admin Logs ====================
 @bot.message_handler(commands=['log'], chat_types=['private'])
 async def cmd_log(message):
-    if message.from_user.id != ADMIN_ID: return
+    if message.from_user.id != ADMIN_ID:
+        return
     args = message.text.split()
     n = 30
     if len(args) > 1:
-        try: n = min(int(args[1]), 100)
-        except: pass
+        try:
+            n = min(int(args[1]), 100)
+        except:
+            pass
     lines = get_logs(n)
     if not lines:
-        await bot.send_message(message.chat.id, "📭 السجل فارغ"); return
-    await bot.send_message(message.chat.id, format_logs_for_telegram(lines, f"آخر {len(lines)} سطر"), parse_mode='HTML')
+        await bot.send_message(message.chat.id, "📭 فارغ")
+        return
+    await bot.send_message(message.chat.id, format_logs_for_telegram(lines, f"آخر {len(lines)}"), parse_mode='HTML')
 
 @bot.message_handler(commands=['log2g'], chat_types=['private'])
 async def cmd_log2g(message):
-    if message.from_user.id != ADMIN_ID: return
+    if message.from_user.id != ADMIN_ID:
+        return
     lines = get_logs(50, "OO-FREE-2GB")
     if not lines:
-        await bot.send_message(message.chat.id, "📭 لا توجد سجلات 2Go"); return
+        await bot.send_message(message.chat.id, "📭 فارغ")
+        return
     await bot.send_message(message.chat.id, format_logs_for_telegram(lines, "سجل 2Go"), parse_mode='HTML')
 
 @bot.message_handler(commands=['logerr'], chat_types=['private'])
 async def cmd_logerr(message):
-    if message.from_user.id != ADMIN_ID: return
+    if message.from_user.id != ADMIN_ID:
+        return
     with _LOG_LOCK:
         all_lines = list(_LOG_BUFFER)
     lines = [l for l in all_lines if 'ERROR' in l or 'WARNING' in l or '❌' in l][-50:]
     if not lines:
-        await bot.send_message(message.chat.id, "✅ لا توجد أخطاء"); return
+        await bot.send_message(message.chat.id, "✅ لا أخطاء")
+        return
     await bot.send_message(message.chat.id, format_logs_for_telegram(lines, "الأخطاء"), parse_mode='HTML')
 
 @bot.message_handler(commands=['clearlog'], chat_types=['private'])
 async def cmd_clearlog(message):
-    if message.from_user.id != ADMIN_ID: return
+    if message.from_user.id != ADMIN_ID:
+        return
     with _LOG_LOCK:
         _LOG_BUFFER.clear()
-    await bot.send_message(message.chat.id, "🗑️ تم مسح السجل")
+    await bot.send_message(message.chat.id, "🗑️ تم المسح")
 
 @bot.message_handler(commands=['admin'], chat_types=['private'])
 async def cmd_admin(message):
-    if message.from_user.id != ADMIN_ID: return
+    if message.from_user.id != ADMIN_ID:
+        return
     await bot.send_message(message.chat.id, "🛠️ <b>لوحة الأدمن</b>", reply_markup=admin_menu_markup(), parse_mode='HTML')
 
 # ==================== Start ====================
 @bot.message_handler(commands=['start'], chat_types=['private'])
 async def cmd_start(message):
-    uid = message.from_user.id; now = time.time()
+    _last_heartbeat[0] = time.time()
+    uid = message.from_user.id
+    now = time.time()
     await typing(message.chat.id)
     if not await check_subscription(uid):
-        await bot.reply_to(message, "🔒 اشترك في القناة:", reply_markup=subscription_markup()); return
+        await bot.reply_to(message, "🔒 اشترك:", reply_markup=subscription_markup())
+        return
     oo_user = oo_load(uid)
     dz_row = db_query("SELECT token FROM numbers WHERE user_id=? LIMIT 1", (uid,), fetch=True)
     last_activity = user_steps.get(uid, {}).get("last_activity", 0)
     elapsed = now - last_activity if last_activity else 99999
     if elapsed < INACTIVITY_SECONDS:
-        if oo_user and oo_user.get("access_token"):
+        if oo_user and oo_user.get("access_token") and not OO_MAINTENANCE:
             user_steps[uid] = {"step": "oo_menu", "last_activity": now}
-            await send_oo_menu(uid, oo_user); return
+            await send_oo_menu(uid, oo_user)
+            return
         if dz_row and dz_row[0] and dz_row[0] != "EXPIRED":
             user_steps[uid] = {"step": "dz_menu", "last_activity": now}
-            await send_dz_menu(uid); return
+            await send_dz_menu(uid)
+            return
     user_steps[uid] = {"step": "await_phone", "last_activity": now}
     await send_welcome(message.chat.id)
 
-# ==================== Callback Handler ====================
+# ==================== Callback ====================
 @bot.callback_query_handler(func=lambda call: (
-    call.message and call.message.chat and call.message.chat.type == 'private'
-))
+    call.message and call.message.chat and call.message.chat.type == 'private'))
 async def cb_handler(call):
+    _last_heartbeat[0] = time.time()
     try:
         await _cb_inner(call)
     except Exception as e:
-        logging.error(f"[CB-CRASH] user={call.from_user.id} data={call.data}: {e}", exc_info=True)
+        logging.error(f"[CB-CRASH] {call.from_user.id}: {e}", exc_info=True)
         try:
-            await bot.answer_callback_query(call.id, "⚠️ حدث خطأ مؤقت، جرّب مرة أخرى")
-        except Exception: pass
+            await bot.answer_callback_query(call.id, "⚠️ خطأ")
+        except:
+            pass
 
 async def _cb_inner(call):
     uid = call.from_user.id
     if call.data.startswith("resend_otp_"):
         target = call.data.replace("resend_otp_", "")
-        try: await bot.delete_message(call.message.chat.id, call.message.message_id)
-        except: pass
+        try:
+            await bot.delete_message(call.message.chat.id, call.message.message_id)
+        except:
+            pass
         await typing(uid)
         ok, remaining = _otp_can_resend(uid)
         if not ok:
             mm = InlineKeyboardMarkup()
-            mm.add(InlineKeyboardButton("🔄 إعادة إرسال", callback_data=f"resend_otp_{target}"))
-            await bot.send_message(uid,
-                f"⏳ <b>انتظر قليلاً</b>\n\n💡 يمكنك إعادة الطلب بعد <b>{remaining}</b> ثانية",
-                reply_markup=mm, parse_mode='HTML')
+            mm.add(InlineKeyboardButton("🔄 إعادة", callback_data=f"resend_otp_{target}"))
+            await bot.send_message(uid, f"⏳ <b>{remaining} ثانية</b>", reply_markup=mm, parse_mode='HTML')
             return
         if target.startswith("2135"):
+            if OO_MAINTENANCE:
+                await bot.send_message(uid, OO_MAINTENANCE_MSG, parse_mode='HTML')
+                return
             oo_clear(uid)
             digits = "0" + target[3:]
-            result = await asyncio.to_thread(ooredoo_send_otp_sync, target)
+            result = await asyncio.to_thread(ooredoo_send_otp_sync, target, uid)
             if not result.get("otp_sent"):
-                await bot.send_message(uid, "❌ تعذر الإرسال"); return
+                await bot.send_message(uid, "❌ تعذر")
+                return
             user_steps[uid] = {"step": "oo_await_otp", "msisdn": target, "device": result["device"], "last_activity": time.time()}
-            mm = InlineKeyboardMarkup(); mm.add(InlineKeyboardButton("🔄 إعادة إرسال", callback_data=f"resend_otp_{target}"))
+            mm = InlineKeyboardMarkup()
+            mm.add(InlineKeyboardButton("🔄 إعادة", callback_data=f"resend_otp_{target}"))
             await send_otp_message(uid, digits, target, mm)
         else:
             db_query("UPDATE numbers SET token=NULL WHERE phone=? AND user_id=?", (target, uid))
@@ -1389,284 +2149,399 @@ async def _cb_inner(call):
             ok2 = await asyncio.to_thread(dj_request_otp, target)
             if ok2:
                 display = "0" + target[3:]
-                mm = InlineKeyboardMarkup(); mm.add(InlineKeyboardButton("🔄 إعادة إرسال", callback_data=f"resend_otp_{target}"))
+                mm = InlineKeyboardMarkup()
+                mm.add(InlineKeyboardButton("🔄 إعادة", callback_data=f"resend_otp_{target}"))
                 await send_otp_message(uid, display, target, mm)
                 user_steps[uid] = {"step": "dz_verify_otp", "phone": target, "display": display, "last_activity": time.time()}
             else:
-                await bot.send_message(uid, "❌ تعذر إرسال الرمز", reply_markup=back_btn("main_menu"))
+                await bot.send_message(uid, "❌ تعذر", reply_markup=back_btn("main_menu"))
         return
     if call.data != "check_sub" and not await check_subscription(uid):
-        try: await bot.delete_message(call.message.chat.id, call.message.message_id)
-        except: pass
-        await bot.send_message(uid, "🔒 اشترك:", reply_markup=subscription_markup()); return
-    try: await bot.delete_message(call.message.chat.id, call.message.message_id)
-    except: pass
+        try:
+            await bot.delete_message(call.message.chat.id, call.message.message_id)
+        except:
+            pass
+        await bot.send_message(uid, "🔒 اشترك:", reply_markup=subscription_markup())
+        return
+    try:
+        await bot.delete_message(call.message.chat.id, call.message.message_id)
+    except:
+        pass
     await typing(uid)
     if uid in user_steps and isinstance(user_steps[uid], dict):
         user_steps[uid]["last_activity"] = time.time()
 
     if call.data == "admin_menu":
-        if uid != ADMIN_ID: return
+        if uid != ADMIN_ID:
+            return
         await bot.send_message(uid, "🛠️ <b>لوحة الأدمن</b>", reply_markup=admin_menu_markup(), parse_mode='HTML')
         return
     if call.data == "admin_log":
-        if uid != ADMIN_ID: return
+        if uid != ADMIN_ID:
+            return
         lines = get_logs(30)
-        if not lines: await bot.send_message(uid, "📭 السجل فارغ"); return
-        await bot.send_message(uid, format_logs_for_telegram(lines, f"آخر {len(lines)} سطر"), parse_mode='HTML')
+        if lines:
+            await bot.send_message(uid, format_logs_for_telegram(lines, f"آخر {len(lines)}"), parse_mode='HTML')
+        else:
+            await bot.send_message(uid, "📭 فارغ")
         return
     if call.data == "admin_log_2g":
-        if uid != ADMIN_ID: return
+        if uid != ADMIN_ID:
+            return
         lines = get_logs(50, "OO-FREE-2GB")
-        if not lines: await bot.send_message(uid, "📭 لا توجد سجلات 2Go"); return
-        await bot.send_message(uid, format_logs_for_telegram(lines, "سجل 2Go"), parse_mode='HTML')
+        if lines:
+            await bot.send_message(uid, format_logs_for_telegram(lines, "سجل 2Go"), parse_mode='HTML')
+        else:
+            await bot.send_message(uid, "📭 فارغ")
         return
     if call.data == "admin_log_err":
-        if uid != ADMIN_ID: return
+        if uid != ADMIN_ID:
+            return
         with _LOG_LOCK:
             all_lines = list(_LOG_BUFFER)
         lines = [l for l in all_lines if 'ERROR' in l or 'WARNING' in l or '❌' in l][-50:]
-        if not lines: await bot.send_message(uid, "✅ لا توجد أخطاء"); return
-        await bot.send_message(uid, format_logs_for_telegram(lines, "الأخطاء"), parse_mode='HTML')
+        if lines:
+            await bot.send_message(uid, format_logs_for_telegram(lines, "الأخطاء"), parse_mode='HTML')
+        else:
+            await bot.send_message(uid, "✅ لا أخطاء")
         return
     if call.data == "admin_log_clear":
-        if uid != ADMIN_ID: return
+        if uid != ADMIN_ID:
+            return
         with _LOG_LOCK:
             _LOG_BUFFER.clear()
-        await bot.send_message(uid, "🗑️ تم مسح السجل")
+        await bot.send_message(uid, "🗑️ تم المسح")
         return
 
     if call.data == "check_sub":
-        if await check_subscription(uid): await cmd_start(call.message)
-        else: await bot.send_message(uid, "❌ لم تشترك!", reply_markup=subscription_markup())
+        if await check_subscription(uid):
+            await cmd_start(call.message)
+        else:
+            await bot.send_message(uid, "❌ لم تشترك!", reply_markup=subscription_markup())
         return
 
     if call.data == "delete_my_number":
         user = oo_load(uid)
         dz_row = db_query("SELECT phone FROM numbers WHERE user_id=? LIMIT 1", (uid,), fetch=True)
         saved = []
-        if dz_row: saved.append(f"🔴 <code>{dz_mask(dz_row[0])}</code> (جيزي)")
-        if user and user.get("msisdn"): saved.append(f"🟠 <code>{o_mask(user['msisdn'])}</code> (أوريدو)")
+        if dz_row:
+            saved.append(f"🔴 <code>{dz_mask(dz_row[0])}</code>")
+        if user and user.get("msisdn"):
+            saved.append(f"🟠 <code>{o_mask(user['msisdn'])}</code>")
         if not saved:
-            await bot.send_message(uid, "📭 ما عندكش رقم محفوظ", reply_markup=back_btn("main_menu")); return
+            await bot.send_message(uid, "📭 ما عندكش رقم", reply_markup=back_btn("main_menu"))
+            return
         kb = InlineKeyboardMarkup(row_width=1)
         kb.add(InlineKeyboardButton("✅ تأكيد الحذف", callback_data="delete_my_number_ok"))
         kb.add(InlineKeyboardButton("❌ إلغاء", callback_data="main_menu"))
-        await bot.send_message(uid, "🗑️ <b>حذف الرقم المحفوظ</b>\n\n📱 <b>الأرقام:</b>\n" + "\n".join(saved),
-            reply_markup=kb, parse_mode='HTML'); return
+        await bot.send_message(uid, "🗑️ <b>حذف الرقم</b>\n" + "\n".join(saved), reply_markup=kb, parse_mode='HTML')
+        return
 
     if call.data == "delete_my_number_ok":
         db_query("DELETE FROM numbers WHERE user_id=?", (uid,))
-        oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
+        oo_clear(uid)
+        dz_clear_session(uid)
+        oo_free2gb_clear(uid)
+        _release_oo_proxy(uid, "deleted")
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
-        await bot.send_message(uid, "✅ <b>تم الحذف</b>\n\n💡 أرسل رقمك من جديد", reply_markup=back_btn("main_menu"), parse_mode='HTML'); return
+        await bot.send_message(uid, "✅ <b>تم الحذف</b>", reply_markup=back_btn("main_menu"), parse_mode='HTML')
+        return
 
     if call.data == "change_phone":
-        oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
+        oo_clear(uid)
+        dz_clear_session(uid)
+        oo_free2gb_clear(uid)
+        _release_oo_proxy(uid, "change")
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
-        await send_welcome(uid); return
+        await send_welcome(uid)
+        return
 
     if call.data.startswith("oo_"):
-        await oo_cb_handler(call); return
+        await oo_cb_handler(call)
+        return
+
+    if call.data == "dz_quick_72gb":
+        nums = db_query("SELECT phone FROM numbers WHERE user_id=? ORDER BY added_date DESC LIMIT 1", (uid,), fetchall=True)
+        if not nums:
+            await bot.send_message(uid, "⚠️ أضف رقماً أولاً.", reply_markup=back_btn("main_menu"))
+            return
+        await dz_process(uid, nums[0][0], "dz_72gb")
+        return
 
     if call.data == "quick_offer_70_4g":
         nums = db_query("SELECT phone FROM numbers WHERE user_id=? ORDER BY added_date DESC LIMIT 1", (uid,), fetchall=True)
-        if not nums: await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu")); return
+        if not nums:
+            await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu"))
+            return
         ph = nums[0][0]
         row = db_query("SELECT token FROM numbers WHERE phone=? AND user_id=?", (ph, uid), fetch=True)
-        if not row or row[0] == "EXPIRED": await _dz_request_new_otp(uid, ph); return
+        if not row or row[0] == "EXPIRED":
+            await _dz_request_new_otp(uid, ph)
+            return
         bal = await asyncio.to_thread(dj_check_balance, row[0], ph)
         if bal.get("status") == "EXPIRED":
             db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (ph,))
-            await _dz_request_new_otp(uid, ph); return
-        cur = bal.get("balance", 0)
-        if cur < 70:
-            await bot.send_message(uid, f"❌ رصيد غير كافي\n💰 {cur} دج", reply_markup=back_btn("main_menu")); return
+            await _dz_request_new_otp(uid, ph)
+            return
+        if bal.get("balance", 0) < 70:
+            await bot.send_message(uid, f"❌ رصيد {bal.get('balance', 0)}", reply_markup=back_btn("main_menu"))
+            return
         result = await dz_activate_offer_70_4g_async(row[0], ph)
         if result.get("token_expired"):
             db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (ph,))
-            await _dz_request_new_otp(uid, ph); return
+            await _dz_request_new_otp(uid, ph)
+            return
         if result.get("success"):
             inc_stat("total_offers")
             await notify_group_success("70دج — 4GB", "Djezzy 🔴")
             await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=main_menu_markup(uid))
-        else: await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=back_btn("main_menu"))
+        else:
+            await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=back_btn("main_menu"))
         return
 
     if call.data == "quick_offer_90_5g":
         nums = db_query("SELECT phone FROM numbers WHERE user_id=? ORDER BY added_date DESC LIMIT 1", (uid,), fetchall=True)
-        if not nums: await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu")); return
+        if not nums:
+            await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu"))
+            return
         ph = nums[0][0]
         row = db_query("SELECT token FROM numbers WHERE phone=? AND user_id=?", (ph, uid), fetch=True)
-        if not row or row[0] == "EXPIRED": await _dz_request_new_otp(uid, ph); return
+        if not row or row[0] == "EXPIRED":
+            await _dz_request_new_otp(uid, ph)
+            return
         bal = await asyncio.to_thread(dj_check_balance, row[0], ph)
         if bal.get("status") == "EXPIRED":
             db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (ph,))
-            await _dz_request_new_otp(uid, ph); return
-        cur = bal.get("balance", 0)
-        if cur < 90:
-            await bot.send_message(uid, f"❌ رصيد غير كافي\n💰 {cur} دج", reply_markup=back_btn("main_menu")); return
+            await _dz_request_new_otp(uid, ph)
+            return
+        if bal.get("balance", 0) < 90:
+            await bot.send_message(uid, "❌ رصيد", reply_markup=back_btn("main_menu"))
+            return
         result = await dz_activate_offer_90_5g_async(row[0], ph)
         if result.get("token_expired"):
             db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (ph,))
-            await _dz_request_new_otp(uid, ph); return
+            await _dz_request_new_otp(uid, ph)
+            return
         if result.get("success"):
             inc_stat("total_offers")
             await notify_group_success("90دج — 5GB", "Djezzy 🔴")
             await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=main_menu_markup(uid))
-        else: await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=back_btn("main_menu"))
+        else:
+            await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=back_btn("main_menu"))
         return
 
     if call.data == "check_balance":
         nums = db_query("SELECT phone FROM numbers WHERE user_id=?", (uid,), fetchall=True)
-        if not nums: await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu")); return
+        if not nums:
+            await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu"))
+            return
         phones = [n[0] for n in nums]
-        if len(phones) == 1: await show_dz_balance(uid, phones[0])
+        if len(phones) == 1:
+            await show_dz_balance(uid, phones[0])
         else:
             m = InlineKeyboardMarkup(row_width=1)
-            for p in phones: m.add(InlineKeyboardButton(f"📱 {dz_mask(p)}", callback_data=f"balance_phone_{p}"))
+            for p in phones:
+                m.add(InlineKeyboardButton(f"📱 {dz_mask(p)}", callback_data=f"balance_phone_{p}"))
             m.add(InlineKeyboardButton("↩️ رجوع", callback_data="main_menu"))
             await bot.send_message(uid, "📱 اختر:", reply_markup=m)
         return
+
     if call.data.startswith("balance_phone_"):
-        await show_dz_balance(uid, call.data.replace("balance_phone_", "")); return
+        await show_dz_balance(uid, call.data.replace("balance_phone_", ""))
+        return
+
     if call.data == "activate_2gb":
         nums = db_query("SELECT phone FROM numbers WHERE user_id=? ORDER BY added_date DESC LIMIT 1", (uid,), fetchall=True)
-        if not nums: await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu")); return
-        await dz_process(uid, nums[0][0], "2gb"); return
+        if not nums:
+            await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu"))
+            return
+        await dz_process(uid, nums[0][0], "2gb")
+        return
+
     if call.data == "show_all_offers":
-        await bot.send_message(uid, "💰:", reply_markup=all_offers_markup()); return
+        await bot.send_message(uid, "💰:", reply_markup=all_offers_markup())
+        return
+
     if call.data.startswith("offer_details_"):
         code = call.data.replace("offer_details_", "")
         o = AVAILABLE_OFFERS.get(code, {})
         nums = db_query("SELECT phone FROM numbers WHERE user_id=? ORDER BY added_date DESC LIMIT 1", (uid,), fetchall=True)
-        if not nums: await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu")); return
+        if not nums:
+            await bot.send_message(uid, "⚠️ أضف رقماً.", reply_markup=back_btn("main_menu"))
+            return
         ph = nums[0][0]
         d = f"💰 <b>{o.get('name')}</b>\n📦 {o.get('data')}\n⏱️ {o.get('validity')}\n💳 <b>{o.get('price')}</b>"
-        await bot.send_message(uid, f"{d}\n\n📱 <code>{dz_mask(ph)}</code>\n\nهل تريد التفعيل؟",
-            reply_markup=confirm_offer_markup(code, ph), parse_mode='HTML'); return
+        await bot.send_message(uid, f"{d}\n\n📱 <code>{dz_mask(ph)}</code>\n\nتأكيد؟",
+                               reply_markup=confirm_offer_markup(code, ph), parse_mode='HTML')
+        return
+
     if call.data.startswith("confirm_offer_"):
-        rest = call.data.replace("confirm_offer_", ""); parts = rest.rsplit("_", 1)
+        rest = call.data.replace("confirm_offer_", "")
+        parts = rest.rsplit("_", 1)
         if len(parts) == 2:
             code, ph = parts
             row = db_query("SELECT token FROM numbers WHERE phone=? AND user_id=?", (ph, uid), fetch=True)
-            if not row or row[0] == "EXPIRED": await _dz_request_new_otp(uid, ph); return
+            if not row or row[0] == "EXPIRED":
+                await _dz_request_new_otp(uid, ph)
+                return
             o = AVAILABLE_OFFERS.get(code, {"name": "العرض", "price": "?"})
             price = dj_extract_price(o.get('price', '0')) or 0
             bal = await asyncio.to_thread(dj_check_balance, row[0], ph)
             if bal.get("status") == "EXPIRED":
                 db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (ph,))
-                await _dz_request_new_otp(uid, ph); return
+                await _dz_request_new_otp(uid, ph)
+                return
             cur = bal.get("balance", 0)
             if price > 0 and cur < price:
-                await bot.send_message(uid, f"❌ رصيد غير كافي\n💰 {cur} دج", reply_markup=back_btn("main_menu"), parse_mode='HTML'); return
+                await bot.send_message(uid, f"❌ رصيد {cur} < {price}", reply_markup=back_btn("main_menu"))
+                return
             kb = InlineKeyboardMarkup(row_width=2)
             kb.add(InlineKeyboardButton("✅ تأكيد", callback_data=f"dzconfirm_offer_{code}_{ph}"),
                    InlineKeyboardButton("❌ إلغاء", callback_data="main_menu"))
             await bot.send_message(uid, f"💰 <b>{cur} دج</b> → <b>{o['name']}</b>\n💳 {price} دج\n\nتأكيد؟",
-                reply_markup=kb, parse_mode='HTML')
+                                   reply_markup=kb, parse_mode='HTML')
         return
+
     if call.data.startswith("dzconfirm_offer_"):
-        rest = call.data.replace("dzconfirm_offer_", ""); code, ph = rest.rsplit("_", 1)
+        rest = call.data.replace("dzconfirm_offer_", "")
+        code, ph = rest.rsplit("_", 1)
         row = db_query("SELECT token FROM numbers WHERE phone=? AND user_id=?", (ph, uid), fetch=True)
-        if not row or row[0] == "EXPIRED": await _dz_request_new_otp(uid, ph); return
+        if not row or row[0] == "EXPIRED":
+            await _dz_request_new_otp(uid, ph)
+            return
         o = AVAILABLE_OFFERS.get(code, {"name": "العرض", "price": "?"})
         price = dj_extract_price(o.get('price', '0')) or 0
         offer_type = "shake" if code.startswith("BTL") else "activate"
         result = await dz_activate_paid_offer_async(row[0], ph, code, offer_type, o.get('name', 'العرض'), price)
         if result.get("token_expired"):
             db_query("UPDATE numbers SET token='EXPIRED' WHERE phone=?", (ph,))
-            await _dz_request_new_otp(uid, ph); return
+            await _dz_request_new_otp(uid, ph)
+            return
         if result.get("success"):
             inc_stat("total_offers")
             await notify_group_success(o.get('name', 'العرض'), "Djezzy 🔴")
             await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=main_menu_markup(uid))
-        else: await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=back_btn("main_menu"))
+        else:
+            await bot.send_message(uid, result["msg"], parse_mode='HTML', reply_markup=back_btn("main_menu"))
         return
+
     if call.data == "bot_stats":
-        if uid != ADMIN_ID: await bot.send_message(uid, "⛔"); return
-        await bot.send_message(uid, get_stats_text(), reply_markup=back_btn("main_menu"), parse_mode='HTML'); return
+        if uid != ADMIN_ID:
+            await bot.send_message(uid, "⛔")
+            return
+        await bot.send_message(uid, get_stats_text(), reply_markup=back_btn("main_menu"), parse_mode='HTML')
+        return
+
     if call.data in ("main_menu", "back_main"):
-        await send_dz_menu(uid); return
+        await send_dz_menu(uid)
+        return
 
 # ==================== OO Callbacks ====================
 async def oo_cb_handler(call):
+    if OO_MAINTENANCE:
+        try:
+            await bot.answer_callback_query(call.id, "أوريدو في صيانة", show_alert=True)
+        except:
+            pass
+        await bot.send_message(call.from_user.id, OO_MAINTENANCE_MSG, parse_mode='HTML')
+        return
+
     uid = call.from_user.id
     data = call.data
     user = oo_load(uid)
     if data == "oo_change":
-        oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
+        oo_clear(uid)
+        dz_clear_session(uid)
+        oo_free2gb_clear(uid)
+        _release_oo_proxy(uid, "change")
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
-        await send_welcome(uid); return
+        await send_welcome(uid)
+        return
     if data == "oo_back_menu":
-        if user: await send_oo_menu(uid, user); return
+        if user:
+            await send_oo_menu(uid, user)
+            return
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
-        await send_welcome(uid); return
+        await send_welcome(uid)
+        return
     if data == "oo_stats":
-        if uid != ADMIN_ID: await bot.send_message(uid, "⛔"); return
-        await bot.send_message(uid, get_stats_text(), reply_markup=back_btn("oo_back_menu"), parse_mode='HTML'); return
+        if uid != ADMIN_ID:
+            await bot.send_message(uid, "⛔")
+            return
+        await bot.send_message(uid, get_stats_text(), reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
+        return
     if not user or not user.get("access_token"):
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
-        await send_welcome(uid); return
+        await send_welcome(uid)
+        return
     user = await asyncio.to_thread(oo_ensure_valid, uid, user)
     if not user:
-        mm = InlineKeyboardMarkup(); mm.add(InlineKeyboardButton("🔄 إرسال رمز", callback_data="oo_change"))
-        await bot.send_message(uid, "⚠️ <b>انتهت الجلسة</b>", reply_markup=mm, parse_mode='HTML'); return
-    ms = user["msisdn"]; at = user["access_token"]
+        mm = InlineKeyboardMarkup()
+        mm.add(InlineKeyboardButton("🔄 إرسال رمز", callback_data="oo_change"))
+        await bot.send_message(uid, "⚠️ <b>انتهت الجلسة</b>", reply_markup=mm, parse_mode='HTML')
+        return
+    ms = user["msisdn"]
+    at = user["access_token"]
     meta = {k: user.get(k, "") for k in ["tok_instance_id","tok_plat_sig","tok_fingerprint","tok_timestamp"]}
 
     if data == "oo_balance":
         inc_stat("oo_balance")
-        r = await asyncio.to_thread(oo_check_balance, ms, at, meta)
+        r = await asyncio.to_thread(oo_check_balance, ms, at, meta, uid)
         if r.get("status") != "ok":
-            await bot.send_message(uid, "❌", reply_markup=back_btn("oo_back_menu")); return
+            await bot.send_message(uid, "❌", reply_markup=back_btn("oo_back_menu"))
+            return
         b = r.get("data", {}).get("accountBalance", "?")
-        await bot.send_message(uid, f"💰 <b>{b} دج</b>\n\n📱 <code>{o_mask(ms)}</code>",
-            reply_markup=back_btn("oo_back_menu"), parse_mode='HTML'); return
+        await bot.send_message(uid, f"💰 <b>{b} دج</b>\n📱 <code>{o_mask(ms)}</code>",
+                               reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
+        return
 
     if data == "oo_my_offers":
         inc_stat("oo_offers_view")
-        r = await asyncio.to_thread(oo_get_active, ms, at, meta)
+        r = await asyncio.to_thread(oo_get_active, ms, at, meta, uid)
         if r["status"] != "ok":
-            await bot.send_message(uid, "❌", reply_markup=back_btn("oo_back_menu")); return
-        d = r.get("data", {}); b = d.get("accountBalance", "?")
-        lines = [f"📋 <b>عروضك</b>\n💰 <b>{b} دج</b>\n"]
-        if len(lines) <= 2: lines.append("📭 <i>لا توجد باقات نشطة</i>")
-        await bot.send_message(uid, "\n".join(lines), reply_markup=back_btn("oo_back_menu"), parse_mode='HTML'); return
+            await bot.send_message(uid, "❌", reply_markup=back_btn("oo_back_menu"))
+            return
+        await bot.send_message(uid, "📋 <b>عروضك</b>\n📭 لا باقات نشطة", reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
+        return
 
     if data == "oo_snap":
-        r = await asyncio.to_thread(oo_activate_snapchat, ms, at, meta)
+        r = await asyncio.to_thread(oo_activate_snapchat, ms, at, meta, uid)
         if r == "ok":
             inc_stat("oo_snap")
+            _mark_oo_proxy_success(uid)
             await notify_group_success("Snapchat", "Ooredoo 🟠")
-            await send_result(uid, f"✅ <b>تم تفعيل سناب!</b>\n📱 <code>{o_mask(ms)}</code>", "oo_back_menu")
+            await send_result(uid, f"✅ <b>سناب مفعّل!</b>\n📱 <code>{o_mask(ms)}</code>", "oo_back_menu")
         elif r == "already_active":
             await bot.send_message(uid, "⚠️ مفعّلة مسبقاً", reply_markup=back_btn("oo_back_menu"))
-        else: await bot.send_message(uid, "❌", reply_markup=back_btn("oo_back_menu"))
+        else:
+            await bot.send_message(uid, "❌", reply_markup=back_btn("oo_back_menu"))
         return
 
     if data == "oo_quick_20_1g":
-        r = await asyncio.to_thread(oo_check_balance, ms, at, meta)
-        try: balance = float(r.get("data", {}).get("accountBalance", 0) or 0)
-        except: balance = 0
+        r = await asyncio.to_thread(oo_check_balance, ms, at, meta, uid)
+        try:
+            balance = float(r.get("data", {}).get("accountBalance", 0) or 0)
+        except:
+            balance = 0
         if balance < 20:
-            await bot.send_message(uid, f"❌ رصيد غير كافي\n💰 {balance} دج", reply_markup=back_btn("oo_back_menu")); return
+            await bot.send_message(uid, f"❌ رصيد {balance}", reply_markup=back_btn("oo_back_menu"))
+            return
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("✅ تأكيد", callback_data="oo_quick_20_1g_ok"),
                InlineKeyboardButton("❌ إلغاء", callback_data="oo_back_menu"))
-        await bot.send_message(uid, f"⚡ <b>20دج — 1Go — 24H</b>\n💰 رصيدك: <b>{balance} دج</b>",
-            reply_markup=kb, parse_mode='HTML'); return
+        await bot.send_message(uid, f"⚡ <b>20دج — 1Go — 24H</b>\n💰 {balance} دج", reply_markup=kb, parse_mode='HTML')
+        return
 
     if data == "oo_quick_20_1g_ok":
-        r = await asyncio.to_thread(oo_purchase_20dzd_1go, ms, at, meta)
+        r = await asyncio.to_thread(oo_purchase_20dzd_1go, ms, at, meta, uid)
         status = r.get("status", "error")
         if status == "ok":
             inc_stat("oo_20dzd_1go")
+            _mark_oo_proxy_success(uid)
             await notify_group_success("20دج — 1Go", "Ooredoo 🟠")
-            await send_result(uid, f"✅ <b>تم التفعيل</b> 🎉\n📱 <code>{o_mask(ms)}</code>\n⚡ 1 جيجا — 24H", "oo_back_menu")
+            await send_result(uid, f"✅ <b>تم</b> 🎉\n📱 <code>{o_mask(ms)}</code>", "oo_back_menu")
             return
-        await bot.send_message(uid, f"❌ فشل التفعيل\n💡 كود: {r.get('code', status)}",
-            reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
+        await bot.send_message(uid, f"❌ فشل\n💡 {status}", reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
         return
 
     if data == "oo_quick_free_2gb":
@@ -1677,121 +2552,80 @@ async def oo_cb_handler(call):
             hh = remaining // 3600
             mmn = (remaining % 3600) // 60
             await bot.send_message(uid,
-                f"⏰ <b>راك مفعّل من قبل</b>\n"
-                f"━━━━━━━━━━━━━━━━\n\n"
-                f"📱 <code>{o_mask(ms)}</code>\n"
-                f"🎁 <b>2 جيجا مجاني — 24H</b>\n\n"
-                f"⏳ <b>المتبقي:</b> {hh} س {mmn} د\n\n"
-                f"💡 رجع بعد انتهاء المدة",
+                f"⏰ <b>راك مفعّل</b>\n📱 <code>{o_mask(ms)}</code>\n⏳ {hh} س {mmn} د",
                 reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
             return
-
-        await bot.send_message(uid, "⏳ <b>جاري تفعيل 2 جيجا المجاني...</b>\n\n⏱️ انتظر قليلاً", parse_mode='HTML')
-        r = await asyncio.to_thread(oo_purchase_free_2gb, ms, at, meta)
+        await bot.send_message(uid, "⏳ <b>جاري التفعيل...</b>", parse_mode='HTML')
+        r = await asyncio.to_thread(oo_purchase_free_2gb, ms, at, meta, uid)
         status = r.get("status", "error")
-
         if status == "ok":
             inc_stat("oo_free_2gb")
             oo_free2gb_save(uid, ms)
-            await notify_group_success("2Go مجاني — 24H", "Ooredoo 🟠")
-            await send_result(uid,
-                f"🎉 <b>مبروك عليك!</b>\n━━━━━━━━━━━━━━━━\n\n"
-                f"✅ <b>تم تفعيل 2 جيجا</b>\n\n"
-                f"📱 <code>{o_mask(ms)}</code>\n🎁 <b>2 جيجا</b>\n"
-                f"⏱️ صالحة <b>24 ساعة</b>\n💰 <b>مجاني 100%</b> 🎉\n\n"
-                f"💡 اطلب <code>*200#</code> باش تشوف رصيدك",
-                "oo_back_menu")
-            if uid == ADMIN_ID:
-                await bot.send_message(uid, f"<b>🔍 تفاصيل للأدمن:</b>\n<pre>{_html.escape(str(r.get('data',{}))[:1500])}</pre>", parse_mode='HTML')
+            _mark_oo_proxy_success(uid)
+            await notify_group_success("2Go مجاني", "Ooredoo 🟠")
+            await send_result(uid, f"🎉 <b>مبروك!</b>\n✅ 2 جيجا\n📱 <code>{o_mask(ms)}</code>\n💡 <code>*200#</code>", "oo_back_menu")
             return
-
         if status == "already":
             oo_free2gb_save(uid, ms)
-            hh = COOLDOWN_FREE_2GB_OO // 3600
-            await bot.send_message(uid,
-                f"⏰ <b>راك مفعّل من قبل</b>\n━━━━━━━━━━━━━━━━\n\n"
-                f"📱 <code>{o_mask(ms)}</code>\n"
-                f"🎁 <b>2 جيجا مجاني — 24H</b>\n\n"
-                f"⏳ <b>انتظر {hh} ساعة</b> وأعد المحاولة\n\n"
-                f"💡 اطلب <code>*200#</code> باش تتأكد",
-                reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
+            await bot.send_message(uid, "⏰ <b>راك مفعّل من قبل</b>", reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
             return
-
         if status == "unauthorized":
-            bal_check = await asyncio.to_thread(oo_check_balance, ms, at, meta)
-            if bal_check.get("status") == "unauthorized":
-                mm = InlineKeyboardMarkup()
-                mm.add(InlineKeyboardButton("🔄 إعادة الدخول", callback_data="oo_change"))
-                await bot.send_message(uid, "🔐 <b>انتهت الجلسة</b>\n\n💡 أعد إدخال الرقم", reply_markup=mm, parse_mode='HTML')
-                return
-            await bot.send_message(uid, "⚠️ <b>تعذر التفعيل مؤقتاً</b>\n\n💡 حاول بعد قليل",
-                reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
-            if uid == ADMIN_ID:
-                await bot.send_message(uid, f"<b>🔍 تفاصيل للأدمن:</b>\n<pre>{_html.escape(str(r.get('data',{}))[:1500])}</pre>", parse_mode='HTML')
+            mm = InlineKeyboardMarkup()
+            mm.add(InlineKeyboardButton("🔄 إعادة الدخول", callback_data="oo_change"))
+            await bot.send_message(uid, "🔐 <b>انتهت الجلسة</b>", reply_markup=mm, parse_mode='HTML')
             return
-
-        if status == "not_allowed":
-            await bot.send_message(uid, "🚫 <b>العرض غير متاح لرقمك</b>",
-                reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
-            if uid == ADMIN_ID:
-                await bot.send_message(uid, f"<b>🔍 تفاصيل للأدمن:</b>\n<pre>{_html.escape(str(r.get('data',{}))[:1500])}</pre>", parse_mode='HTML')
-            return
-
-        await bot.send_message(uid, "❌ <b>فشل التفعيل</b>\n💡 حاول لاحقاً",
-            reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
-        if uid == ADMIN_ID:
-            await bot.send_message(uid, f"<b>🔍 تفاصيل للأدمن:</b>\ncode={r.get('code')}\n<pre>{_html.escape(str(r.get('data',{}))[:1500])}</pre>", parse_mode='HTML')
+        await bot.send_message(uid, "❌ <b>فشل</b>", reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
         return
 
     if data == "oo_quick_72gb":
-        r = await asyncio.to_thread(oo_check_72gb_status, ms, at, meta)
+        r = await asyncio.to_thread(oo_check_72gb_status, ms, at, meta, uid)
         if r.get("status") == "ok":
             d = r.get("data", {})
-            played = d.get("played", True)
-            enable = d.get("gameUIEnable", False)
-            
-            if not enable:
-                await bot.send_message(uid, "🚫 <b>اللعبة غير متاحة لحسابك حالياً.</b>\n\n💡 جرب لاحقاً.", reply_markup=back_btn("oo_back_menu"))
+            if not d.get("gameUIEnable", False):
+                await bot.send_message(uid, "🚫 <b>اللعبة غير متاحة</b>", reply_markup=back_btn("oo_back_menu"))
                 return
-                
-            if played:
-                await bot.send_message(uid, "⏰ <b>راك لعبت وخذيت الجائزة ديجا في هذي الحملة.</b>\n\n💡 انتظر الحملة الجاية.", reply_markup=back_btn("oo_back_menu"))
+            if d.get("played", True):
+                await bot.send_message(uid, "⏰ <b>راك خذيت الجائزة</b>", reply_markup=back_btn("oo_back_menu"))
                 return
-                
-            await bot.send_message(uid, "⏳ <b>جاري محاولة تفعيل 72 جيجا...</b>\n\n💡 قد تتطلب العملية بعض الوقت.", parse_mode='HTML')
-            claim = await asyncio.to_thread(oo_claim_72gb, ms, at, meta)
+            await bot.send_message(uid, "⏳ <b>جاري التفعيل...</b>", parse_mode='HTML')
+            claim = await asyncio.to_thread(oo_claim_72gb, ms, at, meta, uid)
             if claim.get("status") == "ok":
                 inc_stat("oo_72gb")
-                await notify_group_success("72 جيجا (أول نوفمبر)", "Ooredoo 🟠")
-                await send_result(uid, f"🎉 <b>مبروك!</b>\n\n✅ تم تفعيل 72 جيجا بنجاح لرقمك!\n\n💡 تحقق من رصيدك بـ <code>*200#</code>", "oo_back_menu")
+                _mark_oo_proxy_success(uid)
+                await notify_group_success("72 جيجا", "Ooredoo 🟠")
+                await send_result(uid, f"🎉 <b>مبروك!</b>\n✅ 72 جيجا\n📱 <code>{o_mask(ms)}</code>", "oo_back_menu")
             else:
-                await bot.send_message(uid, "⚠️ <b>اللعبة متاحة لكن التفعيل لم ينجح بعد.</b>\n\n💡 يرجى المحاولة بعد قليل (قد يكون المؤقت الداخلي لم ينتهِ).\n⏳ <b>البوت سيحاول تفعيلها تلقائياً في الخلفية.</b>", reply_markup=back_btn("oo_back_menu"))
+                await bot.send_message(uid, "⚠️ <b>لم ينجح بعد</b>", reply_markup=back_btn("oo_back_menu"))
         else:
-            await bot.send_message(uid, "❌ تعبر جلب حالة اللعبة.", reply_markup=back_btn("oo_back_menu"))
+            await bot.send_message(uid, "❌", reply_markup=back_btn("oo_back_menu"))
         return
 
-# ==================== TEXT HANDLER ====================
+# ==================== Text ====================
 @bot.message_handler(func=lambda m: True, content_types=['text'], chat_types=['private'])
 async def handle_text(message):
+    _last_heartbeat[0] = time.time()
     try:
         await _text_inner(message)
     except Exception as e:
-        logging.error(f"[TEXT-CRASH] user={message.from_user.id}: {e}", exc_info=True)
+        logging.error(f"[TEXT-CRASH] {message.from_user.id}: {e}", exc_info=True)
         try:
-            await bot.send_message(message.chat.id, "⚠️ حدث خطأ مؤقت، جرّب مرة أخرى")
-        except Exception: pass
+            await bot.send_message(message.chat.id, "⚠️ خطأ مؤقت")
+        except:
+            pass
 
 async def _text_inner(message):
     uid = message.from_user.id
     text = message.text.strip()
     if not await check_subscription(uid):
-        await cmd_start(message); return
+        await cmd_start(message)
+        return
     now = time.time()
     cur_step = user_steps.get(uid, {}).get("step", "")
     last_activity = user_steps.get(uid, {}).get("last_activity", 0)
     if cur_step in ("dz_menu", "oo_menu") and last_activity and (now - last_activity) > INACTIVITY_SECONDS:
         user_steps[uid] = {"step": "await_phone", "last_activity": now}
-        await send_welcome(uid); return
+        await send_welcome(uid)
+        return
     digits = re.sub(r"\D", "", text)
     is_phone = re.match(r"^0[567]\d{8}$", digits) is not None
     if is_phone and cur_step not in ("oo_await_otp", "dz_verify_otp"):
@@ -1799,76 +2633,100 @@ async def _text_inner(message):
     step = user_steps.get(uid)
     if not step:
         user_steps[uid] = {"step": "await_phone", "last_activity": now}
-        await send_welcome(uid); return
+        await send_welcome(uid)
+        return
 
     if step.get("step") == "await_phone":
         if not is_phone:
-            await bot.send_message(uid, "❌ رقم غير صحيح"); return
+            await bot.send_message(uid, "❌ رقم غير صحيح")
+            return
         msisdn = "213" + digits[1:]
         if digits.startswith(("07", "06")):
             row = db_query("SELECT token FROM numbers WHERE phone=? AND user_id=?", (msisdn, uid), fetch=True)
             if row and row[0] and row[0] != "EXPIRED":
                 user_steps[uid] = {"step": "dz_menu", "last_activity": now}
-                await send_dz_menu(uid, msisdn); return
+                await send_dz_menu(uid, msisdn)
+                return
             ok = await asyncio.to_thread(dj_request_otp, msisdn)
             if ok:
-                mm = InlineKeyboardMarkup(); mm.add(InlineKeyboardButton("🔄 إعادة إرسال", callback_data=f"resend_otp_{msisdn}"))
+                mm = InlineKeyboardMarkup()
+                mm.add(InlineKeyboardButton("🔄 إعادة", callback_data=f"resend_otp_{msisdn}"))
                 await send_otp_message(uid, digits, msisdn, mm)
                 user_steps[uid] = {"step": "dz_verify_otp", "phone": msisdn, "display": digits, "last_activity": now}
             else:
-                await bot.send_message(uid, "❌ تعذر إرسال الرمز", reply_markup=back_btn("main_menu"))
+                await bot.send_message(uid, "❌ تعذر", reply_markup=back_btn("main_menu"))
             return
         if digits.startswith("05"):
+            if OO_MAINTENANCE:
+                await bot.send_message(uid, OO_MAINTENANCE_MSG, parse_mode='HTML')
+                return
             existing = oo_load(uid)
             if existing and existing.get("msisdn") == msisdn and existing.get("access_token"):
                 user_steps[uid] = {"step": "oo_menu", "last_activity": now}
-                await send_oo_menu(uid, existing); return
-            result = await asyncio.to_thread(ooredoo_send_otp_sync, msisdn)
+                await send_oo_menu(uid, existing)
+                return
+            result = await asyncio.to_thread(ooredoo_send_otp_sync, msisdn, uid)
             if not result.get("otp_sent"):
-                await bot.send_message(uid, "❌ تعذر الإرسال"); return
+                reason = result.get("reason", "")
+                if reason == "rate_limit":
+                    await bot.send_message(uid, "⏳ <b>تجاوزت الحد</b>", parse_mode='HTML')
+                else:
+                    await bot.send_message(uid, "❌ <b>تعذر الإرسال</b>\n💡 جرّب بعد دقيقة", parse_mode='HTML')
+                return
             user_steps[uid] = {"step": "oo_await_otp", "msisdn": msisdn, "device": result["device"], "last_activity": now}
-            mm = InlineKeyboardMarkup(); mm.add(InlineKeyboardButton("🔄 إعادة إرسال", callback_data=f"resend_otp_{msisdn}"))
+            mm = InlineKeyboardMarkup()
+            mm.add(InlineKeyboardButton("🔄 إعادة", callback_data=f"resend_otp_{msisdn}"))
             await send_otp_message(uid, digits, msisdn, mm)
             return
 
     if step.get("step") == "oo_await_otp":
         m = re.search(r"\b(\d{6})\b", text)
         if not m:
-            await bot.send_message(uid, "⚠️ أرسل 6 أرقام فقط"); return
-        otp = m.group(1); ms = step.get("msisdn"); device = step.get("device", {})
+            await bot.send_message(uid, "⚠️ 6 أرقام")
+            return
+        otp = m.group(1)
+        ms = step.get("msisdn")
+        device = step.get("device", {})
         wait_msg = None
         try:
-            wait_msg = await bot.send_message(uid, "🔍 جاري التحقق... انتظر ثوانٍ")
-        except: pass
-        result = await asyncio.to_thread(ooredoo_verify_otp_sync, ms, otp, device)
+            wait_msg = await bot.send_message(uid, "🔍 جاري التحقق...")
+        except:
+            pass
+        result = await asyncio.to_thread(ooredoo_verify_otp_sync, ms, otp, device, uid)
         if wait_msg:
-            try: await bot.delete_message(uid, wait_msg.message_id)
-            except: pass
+            try:
+                await bot.delete_message(uid, wait_msg.message_id)
+            except:
+                pass
         if result == "wrong_otp":
-            await bot.send_message(uid, "❌ الرمز خاطئ، جرّب مرة أخرى"); return
+            await bot.send_message(uid, "❌ الرمز خاطئ")
+            return
         if not result:
-            await bot.send_message(uid,
-                "❌ <b>فشل التحقق</b>\n\n"
-                "💡 تحقق من الرمز أو أعد الإرسال",
-                parse_mode='HTML'); return
+            await bot.send_message(uid, "❌ <b>فشل التحقق</b>", parse_mode='HTML')
+            return
         user = {"msisdn": ms, "device": device, **result}
         oo_save(uid, user)
         inc_stat("oo_logins")
         user_steps[uid] = {"step": "oo_menu", "last_activity": time.time()}
-        await send_oo_menu(uid, user); return
+        await send_oo_menu(uid, user)
+        return
 
     if step.get("step") == "dz_verify_otp":
         if not text.isdigit() or len(text) != 6:
-            await bot.send_message(uid, "❌ 6 أرقام"); return
+            await bot.send_message(uid, "❌ 6 أرقام")
+            return
         phone = step.get("phone")
         wait_msg = None
         try:
-            wait_msg = await bot.send_message(uid, "🔍 جاري التحقق... انتظر ثوانٍ")
-        except: pass
+            wait_msg = await bot.send_message(uid, "🔍 جاري التحقق...")
+        except:
+            pass
         token = await asyncio.to_thread(dj_verify_otp, phone, text)
         if wait_msg:
-            try: await bot.delete_message(uid, wait_msg.message_id)
-            except: pass
+            try:
+                await bot.delete_message(uid, wait_msg.message_id)
+            except:
+                pass
         if token and token != "EXPIRED":
             db_query("INSERT OR REPLACE INTO numbers (phone,user_id,token,added_date) VALUES (?,?,?,?)",
                      (phone, uid, token, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
@@ -1877,23 +2735,22 @@ async def _text_inner(message):
             user_steps[uid] = {"step": "dz_menu", "last_activity": time.time()}
             await send_dz_menu(uid, phone)
         else:
-            await bot.send_message(uid,
-                "❌ <b>الرمز خاطئ</b>\n\n"
-                "💡 أعد المحاولة أو أرسل /start",
-                parse_mode='HTML')
+            await bot.send_message(uid, "❌ <b>الرمز خاطئ</b>", parse_mode='HTML')
         return
 
     oo_user = oo_load(uid)
-    if oo_user:
+    if oo_user and not OO_MAINTENANCE:
         user_steps[uid] = {"step": "oo_menu", "last_activity": now}
-        await send_oo_menu(uid, oo_user); return
+        await send_oo_menu(uid, oo_user)
+        return
     if db_query("SELECT token FROM numbers WHERE user_id=? LIMIT 1", (uid,), fetch=True):
         user_steps[uid] = {"step": "dz_menu", "last_activity": now}
-        await send_dz_menu(uid); return
+        await send_dz_menu(uid)
+        return
     user_steps[uid] = {"step": "await_phone", "last_activity": now}
     await send_welcome(uid)
 
-# ==================== Main (Robust — لا يتوقف أبداً) ====================
+# ==================== Main ====================
 _last_heartbeat = [time.time()]
 
 def _install_global_handlers():
@@ -1916,7 +2773,7 @@ async def _run_polling_once():
         logging.warning(f"[POLL] remove_webhook: {e}")
     logging.warning("[POLL] ▶️ infinity_polling starting...")
     await bot.infinity_polling(skip_pending=True, timeout=30)
-    logging.warning("[POLL] ⚠️ infinity_polling returned unexpectedly")
+    logging.warning("[POLL] ⚠️ returned unexpectedly")
 
 async def _polling_supervisor():
     RESTART_TIMEOUT = 60 * 60
@@ -1930,22 +2787,20 @@ async def _polling_supervisor():
                 await asyncio.sleep(30)
                 now = time.time()
                 if now - started > RESTART_TIMEOUT:
-                    logging.warning(f"[SUPERVISOR] ⏰ {RESTART_TIMEOUT}s reached — proactive restart")
+                    logging.warning(f"[SUPERVISOR] ⏰ restart")
                     break
                 if now - _last_heartbeat[0] > STUCK_THRESHOLD:
-                    logging.warning(f"[SUPERVISOR] 🚨 No updates for {int(now-_last_heartbeat[0])}s — checking API...")
                     try:
                         await asyncio.wait_for(bot.get_me(), timeout=15)
-                        logging.warning("[SUPERVISOR] ✅ API OK — resetting heartbeat")
                         _last_heartbeat[0] = time.time()
                     except Exception as e:
-                        logging.error(f"[SUPERVISOR] ❌ API dead ({e}) — restarting polling")
+                        logging.error(f"[SUPERVISOR] ❌ API dead ({e})")
                         break
             if not task.done():
                 task.cancel()
                 try:
                     await asyncio.wait_for(task, timeout=10)
-                except Exception:
+                except:
                     pass
         except asyncio.CancelledError:
             task.cancel()
@@ -1953,26 +2808,37 @@ async def _polling_supervisor():
         except Exception as e:
             logging.error(f"[SUPERVISOR] {type(e).__name__}: {e}", exc_info=True)
             task.cancel()
-            try: await task
-            except Exception: pass
+            try:
+                await task
+            except:
+                pass
         if not _stop_threads.is_set():
             await asyncio.sleep(3)
 
 async def main():
     global MAIN_EVENT_LOOP
     MAIN_EVENT_LOOP = asyncio.get_running_loop()
-    
     print("=" * 60)
-    print("🤖 البوت الموحّد v3 — Robust + 72GB Auto Claimer")
-    print(f"👤 الأدمن: {ADMIN_ID}")
+    print("🤖 البوت v6 — تفعيل مباشر بدون انتظار (72GB)")
+    print(f"👤 ADMIN: {ADMIN_ID}")
     print("=" * 60)
     _install_global_handlers()
     user_steps.update(load_steps_saved())
-    
+
+    # 🧹 مسح قائمة الانتظار القديمة (انتقلنا للنمط المباشر)
+    try:
+        _pending_72gb.clear()
+        save_pending_72gb()
+        logging.info("[72GB] Cleared old pending queue (direct mode active)")
+    except:
+        pass
+
+    # 🧵 الخيوط الخلفية
     for fn in (oo_auto_refresh, dz_auto_refresh, steps_saver_worker,
-               reset_steps_worker, _proxy_proactive_rotate, oo_auto_claim_72gb_worker):
+               reset_steps_worker, _proxy_proactive_rotate,
+               oo_proxy_cleaner, oo_auto_claim_72gb_worker):
         threading.Thread(target=fn, daemon=True, name=fn.__name__).start()
-        
+
     print("✅ البوت يعمل...")
     while not _stop_threads.is_set():
         try:
@@ -1987,14 +2853,18 @@ def _run_forever():
         try:
             asyncio.run(main())
         except KeyboardInterrupt:
-            logging.warning("[RUN] ⚠️ Ctrl+C — restart in 2s...")
-            try: save_steps()
-            except: pass
+            logging.warning("[RUN] Ctrl+C")
+            try:
+                save_steps()
+            except:
+                pass
             time.sleep(2)
         except Exception as e:
-            logging.error(f"[RUN] ❌ asyncio.run crashed: {type(e).__name__}: {e}", exc_info=True)
-            try: save_steps()
-            except: pass
+            logging.error(f"[RUN] ❌ {type(e).__name__}: {e}", exc_info=True)
+            try:
+                save_steps()
+            except:
+                pass
             time.sleep(5)
 
 if __name__ == "__main__":
