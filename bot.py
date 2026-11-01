@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""البوت الموحّد v6.7 — Djezzy Robust OTP + Ooredoo 72GB Background Retry"""
+"""v6.8.4 — 2GB Free + Server Monitor + OTP fix + JWT device-id fix"""
 import telebot
 from telebot.async_telebot import AsyncTeleBot
 from telebot.types import InlineKeyboardMarkup, InlineKeyboardButton
@@ -73,6 +73,11 @@ X_VERSION_OTP = "1.5.16"
 X_SIG = "5c7641dbb82cf11066df68afc91541c967640106a95192740b43d51a5ce6777a"
 X_SIG_RAMADAN = "c66054ba6166fe08d1a6a702fb10b151102a6f4ef058fcf3d995ee511ff0d267"
 NOTIFY_GROUP = "@ifoekdjdh"
+
+_oo_72gb_jobs = {}
+_oo_72gb_jobs_lock = threading.Lock()
+OO_72GB_MAX_ATTEMPTS = 40
+OO_OTP_MAX_ATTEMPTS  = 15
 
 # ==================== Oxylabs ====================
 PROXY_USERNAME = "resi_0614e541"
@@ -161,8 +166,6 @@ _oo_proxy_lock     = threading.Lock()
 OO_PROXY_HOLD_SECONDS = 180
 OO_PROXY_BAN_AFTER    = 3
 OO_PROXY_BAN_SECONDS  = 600
-OO_PROXY_TIMEOUT      = 12
-OO_PROXY_MAX_TRIES    = 4
 
 def _mask_oo_proxy(p):
     try: return p.split("@", 1)[1]
@@ -196,7 +199,8 @@ def _get_oo_proxy_for_user(uid, exclude=None):
                 candidates.append(p)
         if not candidates:
             candidates = [p for p in OO_PROXY_POOL if p not in exclude]
-        if not candidates: return OO_PROXY_POOL[0]
+        if not candidates:
+            return OO_PROXY_POOL[0]
         chosen = random.choice(candidates)
         _oo_proxy_in_use[chosen] = {"uid": uid, "since": now}
         _oo_user_to_proxy[uid] = chosen
@@ -269,22 +273,6 @@ SESSIONS_DIR = BASE_DIR / "sessions"
 for d in (BASE_DIR, SESSIONS_DIR):
     d.mkdir(parents=True, exist_ok=True)
 
-PENDING_72GB_FILE = BASE_DIR / "pending_72gb.json"
-_pending_72gb = {}
-
-def load_pending_72gb():
-    global _pending_72gb
-    try:
-        if PENDING_72GB_FILE.exists():
-            _pending_72gb = json.loads(PENDING_72GB_FILE.read_text())
-    except: _pending_72gb = {}
-
-def save_pending_72gb():
-    try: PENDING_72GB_FILE.write_text(json.dumps(_pending_72gb, ensure_ascii=False))
-    except: pass
-
-load_pending_72gb()
-
 logging.basicConfig(level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[logging.StreamHandler(), logging.FileHandler(str(BASE_DIR / "bot.log"), encoding='utf-8')])
@@ -316,7 +304,8 @@ def format_logs_for_telegram(lines, title):
     body_raw = "\n".join(lines) if lines else "(فارغ)"
     body = _html.escape(body_raw)
     max_body = 3800 - len(header) - len(footer)
-    if len(body) > max_body: body = "..." + body[-max_body:]
+    if len(body) > max_body:
+        body = "..." + body[-max_body:]
     return header + body + footer
 
 STEPS_FILE = BASE_DIR / "user_steps.json"
@@ -446,20 +435,6 @@ bot = AsyncTeleBot(TOKEN)
 user_steps = {}
 _last_otp_sent = {}
 MAIN_EVENT_LOOP = None
-
-# v6.7: مهام 72GB خلفية + قفل OTP جيزي
-_oo_72gb_jobs = {}
-_oo_72gb_jobs_lock = threading.Lock()
-OO_72GB_MAX_ATTEMPTS = 60
-OO_OTP_MAX_ATTEMPTS = 30
-_dj_otp_locks = {}
-_dj_otp_locks_lock = threading.Lock()
-
-def _get_dj_otp_lock(phone):
-    with _dj_otp_locks_lock:
-        if phone not in _dj_otp_locks:
-            _dj_otp_locks[phone] = threading.Lock()
-        return _dj_otp_locks[phone]
 
 # ==================== DB ====================
 def init_db():
@@ -594,72 +569,18 @@ def load_steps_saved():
 
 # ==================== جيزي ====================
 def dj_request_otp(phone):
-    """v6.7: بروكسي محفوظ + 60 محاولة صامتة / 180 ثانية + انتظار 429 طويل"""
-    lock = _get_dj_otp_lock(phone)
-    if not lock.acquire(timeout=0.5):
-        logging.warning(f"[DJ-OTP] {phone} ⏳ concurrent → BUSY")
-        return "IN_PROGRESS"
-    try:
-        START = time.time()
-        OVERALL_TIMEOUT = 180
-        MAX_ATTEMPTS = 60
-        uas = ["MobileApp/3.0.7", "MobileApp/3.0.0", "okhttp/4.12.0",
-               "MobileApp/3.0.9", "MobileApp/3.0.8"]
-        langs = ["fr", "ar", "en"]
-        wait = 1.5
-        last_status, last_body = -1, ""
-        attempt = 0
-
-        while time.time() - START < OVERALL_TIMEOUT and attempt < MAX_ATTEMPTS:
-            attempt += 1
-            ua = uas[(attempt - 1) % len(uas)]
-            if attempt > 1 and attempt % 5 == 0:
-                _rotate_proxy_session(force=True)
-                logging.info(f"[DJ-OTP] {phone} 🔄 proxy rotated (attempt {attempt})")
-            h = DJ_HEADERS.copy(); h['User-Agent'] = ua
-            if attempt % 4 == 0: h['accept-language'] = random.choice(langs)
-            try:
-                r = _dz_req("POST", f"{DJ_BASE}/oauth2/registration",
-                            headers=h,
-                            params={'msisdn': phone, 'client_id': DJ_CLIENT_ID, 'scope': "smsotp"},
-                            json_body={"consent-agreement": [{"marketing-notifications": False}],
-                                       "is-consent": True},
-                            timeout=20)
-            except Exception as e:
-                logging.warning(f"[DJ-OTP] {phone} attempt {attempt} exc: {str(e)[:80]}")
-                time.sleep(wait); wait = min(wait * 1.3, 8); continue
-
-            if r is None:
-                last_status = 0
-                logging.info(f"[DJ-OTP] {phone} attempt {attempt}/{MAX_ATTEMPTS} → NONE")
-                time.sleep(wait); wait = min(wait * 1.3, 8); continue
-
-            last_status = r.status_code
-            last_body = (r.text or "")[:200]
-            logging.info(f"[DJ-OTP] {phone} attempt {attempt}/{MAX_ATTEMPTS} ua={ua} → {r.status_code} | {last_body[:80]}")
-
-            if r.status_code == 200: return True
-
-            body_low = last_body.lower()
-            fatal_kw = ["not registered", "non enregistré", "غير مسجل",
-                        "invalid number", "numéro invalide", "رقم غير صحيح",
-                        "not a djezzy", "pas un numéro djezzy", "not found"]
-            if r.status_code == 400 and any(k in body_low for k in fatal_kw):
-                logging.warning(f"[DJ-OTP] {phone} ❌ FATAL: {last_body[:120]}")
-                return False
-
-            if r.status_code == 429:
-                s = random.uniform(20, 30)
-                logging.info(f"[DJ-OTP] {phone} ⏳ 429 → sleeping {s:.0f}s")
-                time.sleep(s); wait = 2.0; continue
-
-            time.sleep(wait); wait = min(wait * 1.3, 10)
-
-        logging.warning(f"[DJ-OTP] {phone} ❌ FAILED after {attempt} | last={last_status} | {last_body[:100]}")
-        return False
-    finally:
-        try: lock.release()
-        except: pass
+    url = f"{DJ_BASE}/oauth2/registration"
+    params = {'msisdn': phone, 'client_id': DJ_CLIENT_ID, 'scope': "smsotp"}
+    payload = {"consent-agreement": [{"marketing-notifications": False}], "is-consent": True}
+    for ua in ["MobileApp/3.0.7", "MobileApp/3.0.0", "okhttp/4.12.0"]:
+        h = DJ_HEADERS.copy(); h['User-Agent'] = ua
+        r = _dz_req("POST", url, headers=h, params=params, json_body=payload, timeout=15)
+        if r is None:
+            time.sleep(0.5); continue
+        if r.status_code == 200: return True
+        if r.status_code in (429, 400): return False
+        time.sleep(0.5)
+    return False
 
 def dj_verify_otp(phone, otp):
     url = f"{DJ_BASE}/oauth2/token"
@@ -721,8 +642,7 @@ def dj_activate_2gb(token, phone):
         last_code = r.status_code
         if r.status_code == 401: return "EXPIRED"
         if r.status_code in (200, 201):
-            try: body = r.text.lower()
-            except: body = ""
+            body = (r.text or "").lower()
             if "already" in body: return "LIMIT"
             return "SUCCESS"
         if r.status_code == 402: return "NO_BALANCE"
@@ -764,7 +684,8 @@ def dj_activate_72gb_scan(token, phone):
             msg_text = ""
             if isinstance(msg, dict):
                 msg_text = (str(msg.get("ar","")) + " " + str(msg.get("en","")) + " " + str(msg.get("fr",""))).lower()
-            elif isinstance(msg, str): msg_text = msg.lower()
+            elif isinstance(msg, str):
+                msg_text = msg.lower()
             if msg_text and any(kw in msg_text for kw in already_kw + not_eligible_kw):
                 dz_mark_72gb_activated(phone); return "LIMIT"
         except: pass
@@ -779,7 +700,6 @@ def dj_activate_72gb_scan(token, phone):
     except Exception as e:
         logging.warning(f"[DJ-72GB] {phone}: {e}")
         return "FAILED"
-
 async def dz_activate_paid_offer_async(token, phone, package_code, offer_type, offer_name, price):
     h = DZ_HEADERS.copy(); h['Authorization'] = f"Bearer {token}"
     async def _try_post(url, label):
@@ -856,6 +776,7 @@ async def dz_activate_offer_90_5g_async(token, phone):
         fb = await _try_post(f"{DZ_BASE_URL}/api/v1/subscribers/activate-product/{phone}", "fb")
         if fb.get("success") or fb.get("token_expired"): return fb
     return r_post
+
 # ==================== أوريدو ====================
 def _now_ms(): return str(int(time.time() * 1000))
 def _iid(): return str(uuid.uuid4()) + _now_ms()
@@ -866,6 +787,7 @@ def _fp(): return os.urandom(32).hex()
 def _corr(): return str(uuid.uuid4()) + str(int(time.time() * 100))
 
 def _exdid(at):
+    """استخراج device-id من JWT"""
     try:
         p = at.split(".")
         pad = len(p[1]) % 4
@@ -913,14 +835,54 @@ def _web_hdrs(msisdn, at, meta, ct=""):
     return h
 
 def ooredoo_send_otp_sync(msisdn, uid):
-    tried = set()
-    for attempt in range(6):
-        proxy_str = _get_oo_proxy_for_user(uid, exclude=tried)
-        if not proxy_str or proxy_str in tried: break
-        tried.add(proxy_str)
-        ts = _now_ms(); iid_val = _iid(); psig = _pld(iid_val); fp = _fp()
+    """v6.8.3:
+    • نفس الـ proxy لـ 4 محاولات متتالية
+    • نفس الـ device-fingerprint طوال المحاولات
+    • 403 = OTP SENT بنجاح → توقف فوري
+    """
+    START = time.time()
+    OVERALL_TIMEOUT = 180
+    MAX_ATTEMPTS = OO_OTP_MAX_ATTEMPTS
+    SAME_PROXY_ATTEMPTS = 4
+    wait = 2.5
+    last_status = -1
+    last_reason = ""
+
+    # device ثابت لكل المحاولات
+    iid_val = _iid()
+    psig = _pld(iid_val)
+    fp = _fp()
+
+    current_proxy = None
+    attempts_on_current = 0
+    tried_proxies = set()
+
+    for attempt in range(MAX_ATTEMPTS):
+        if time.time() - START > OVERALL_TIMEOUT:
+            last_reason = "overall_timeout"
+            logging.warning(f"[OO-OTP] {msisdn} ⏰ timeout after {attempt} attempts")
+            break
+
+        if current_proxy is None or attempts_on_current >= SAME_PROXY_ATTEMPTS:
+            if current_proxy:
+                tried_proxies.add(current_proxy)
+                _release_oo_proxy(uid, reason="switch")
+            if len(tried_proxies) >= 40:
+                tried_proxies.clear()
+            current_proxy = _get_oo_proxy_for_user(uid, exclude=tried_proxies)
+            attempts_on_current = 0
+            if not current_proxy:
+                last_reason = "no_proxy"
+                break
+            logging.info(f"[OO-OTP] {msisdn} 🔄 NEW proxy={_mask_oo_proxy(current_proxy)} (switch #{len(tried_proxies)})")
+
+        attempts_on_current += 1
+        proxy_str = current_proxy
         device = {"instance_id": iid_val, "plat_sig": psig, "fp": fp, "proxy_str": proxy_str}
+        ts = _now_ms()
         nonce, chronos = "", ""
+
+        # Step 1: checkpoint
         try:
             h3 = _base_hdrs(msisdn, iid_val, psig, _corr(), ts, fp=fp)
             h3["x-version"] = X_VERSION_OTP
@@ -928,46 +890,80 @@ def ooredoo_send_otp_sync(msisdn, uid):
                        "x-native-integrity-token": INTEGRITY_1,
                        "x-path": "/api/auth/realms/myooredoo/protocol/openid-connect/token",
                        "x-method": "POST"})
-            r3 = _oo_req_with_proxy("POST", f"{OO_BFF}/checkpoint/token", h3, b"{}", timeout=12, proxy_str=proxy_str)
+            r3 = _oo_req_with_proxy("POST", f"{OO_BFF}/checkpoint/token", h3, b"{}",
+                                    timeout=25, proxy_str=proxy_str)
             if r3 is None:
-                _release_oo_proxy(uid, reason="checkpoint_fail"); continue
+                _mark_oo_proxy_fail(proxy_str, "checkpoint_none")
+                last_status, last_reason = 0, "checkpoint_none"
+                logging.info(f"[OO-OTP] {msisdn} attempt {attempt+1}/{MAX_ATTEMPTS} "
+                             f"proxy={_mask_oo_proxy(proxy_str)} "
+                             f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → checkpoint FAIL")
+                time.sleep(wait); wait = min(wait * 1.3, 12)
+                continue
             _, rh3, _ = r3
             nonce = rh3.get("x-nonce-id") or rh3.get("X-Nonce-Id") or ""
             chronos = rh3.get("x-chronos-id") or rh3.get("X-Chronos-Id") or ""
         except Exception as e:
-            logging.error(f"[OO-OTP] checkpoint: {e}")
-            _release_oo_proxy(uid, reason="checkpoint_exc"); continue
+            logging.error(f"[OO-OTP] checkpoint exc: {e}")
+            time.sleep(wait); wait = min(wait * 1.3, 12)
+            continue
+
+        # Step 2: إرسال OTP
         try:
-            h4 = {"User-Agent":"Dart/3.11 (dart:io)","Accept-Encoding":"gzip","x-msisdn":msisdn,
-                  "x-device-fingerprint":fp,"x-platform-origin":"mobile-android",
-                  "platform":"android","x-version":X_VERSION_OTP,"x-signature":X_SIG,
-                  "x-timestamp":ts,"x-platform-info":psig,"x-force-update":"true",
-                  "x-instance-id":iid_val,"content-type":"application/x-www-form-urlencoded"}
-            if nonce: h4["x-nonce-id"] = nonce
+            h4 = {"User-Agent": "Dart/3.11 (dart:io)", "Accept-Encoding": "gzip",
+                  "x-msisdn": msisdn, "x-device-fingerprint": fp,
+                  "x-platform-origin": "mobile-android", "platform": "android",
+                  "x-version": X_VERSION_OTP, "x-signature": X_SIG, "x-timestamp": ts,
+                  "x-platform-info": psig, "x-force-update": "true",
+                  "x-instance-id": iid_val,
+                  "content-type": "application/x-www-form-urlencoded"}
+            if nonce:   h4["x-nonce-id"] = nonce
             if chronos: h4["x-chronos-id"] = chronos
             body = f"client_id={OO_CLIENT}&grant_type=password&username={msisdn}"
-            r4 = _oo_req_with_proxy("POST", OO_AUTH, h4, body, timeout=25, proxy_str=proxy_str)
+            r4 = _oo_req_with_proxy("POST", OO_AUTH, h4, body, timeout=35, proxy_str=proxy_str)
             if r4 is None:
-                _release_oo_proxy(uid, reason="otp_fail"); continue
+                _mark_oo_proxy_fail(proxy_str, "otp_none")
+                last_status, last_reason = 0, "otp_none"
+                logging.info(f"[OO-OTP] {msisdn} attempt {attempt+1}/{MAX_ATTEMPTS} "
+                             f"proxy={_mask_oo_proxy(proxy_str)} "
+                             f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → NONE")
+                time.sleep(wait); wait = min(wait * 1.3, 12)
+                continue
             c4, _, _ = r4
-            logging.info(f"[OO-OTP] {msisdn} uid={uid} proxy={_mask_oo_proxy(proxy_str)} → {c4}")
-            if c4 in (200, 401):
-                return {"device": device, "otp_sent": True, "status": c4}
+            last_status = c4
+            logging.info(f"[OO-OTP] {msisdn} uid={uid} attempt {attempt+1}/{MAX_ATTEMPTS} "
+                         f"proxy={_mask_oo_proxy(proxy_str)} "
+                         f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → {c4}")
+
+            # ✅ 403 = OTP SENT بنجاح
             if c4 == 403:
-                _mark_oo_proxy_fail(proxy_str, "forbidden")
-                _release_oo_proxy(uid, reason="403_send"); continue
+                logging.info(f"[OO-OTP] {msisdn} ✅ OTP SENT (403 = success)")
+                _release_oo_proxy(uid, reason="success")
+                return {"device": device, "otp_sent": True, "status": 403}
+
+            if c4 in (200, 401):
+                logging.info(f"[OO-OTP] {msisdn} ✅ OTP SENT (code={c4})")
+                _release_oo_proxy(uid, reason="success")
+                return {"device": device, "otp_sent": True, "status": c4}
+
             if c4 == 429:
-                _release_oo_proxy(uid, reason="rate_limit")
-                return {"device": device, "otp_sent": False, "status": 429, "reason": "rate_limit"}
+                logging.info(f"[OO-OTP] {msisdn} ⚠️ 429 rate-limit → switching proxy")
+                attempts_on_current = SAME_PROXY_ATTEMPTS
+                time.sleep(wait * 1.5); wait = min(wait * 1.3, 15)
+                continue
+
             _mark_oo_proxy_fail(proxy_str, f"http{c4}")
-            _release_oo_proxy(uid, reason=f"http{c4}"); continue
+            time.sleep(wait); wait = min(wait * 1.3, 12)
+            continue
         except Exception as e:
-            logging.error(f"[OO-OTP] send: {e}")
-            _mark_oo_proxy_fail(proxy_str, "exception")
-            _release_oo_proxy(uid, reason="exception"); continue
+            logging.error(f"[OO-OTP] send exc: {e}")
+            time.sleep(wait); wait = min(wait * 1.3, 12)
+            continue
+
     _release_oo_proxy(uid, reason="all_failed")
-    return {"device": {"instance_id": _iid(), "plat_sig": "", "fp": _fp(), "proxy_str": None},
-            "otp_sent": False, "status": -1, "reason": "all_proxies_failed"}
+    logging.warning(f"[OO-OTP] {msisdn} uid={uid} ❌ FAILED | reason={last_reason} last={last_status}")
+    return {"device": {"instance_id": iid_val, "plat_sig": psig, "fp": fp, "proxy_str": None},
+            "otp_sent": False, "status": last_status, "reason": last_reason or "all_proxies_failed"}
 
 def ooredoo_verify_otp_sync(msisdn, otp, device, uid):
     proxy_str = device.get("proxy_str")
@@ -982,7 +978,7 @@ def ooredoo_verify_otp_sync(msisdn, otp, device, uid):
             h6.update({"content-type":"application/json; charset=utf-8",
                        "x-native-integrity-token":INTEGRITY_2,
                        "x-path":"/api/auth/realms/myooredoo/protocol/openid-connect/token","x-method":"POST"})
-            r6 = _oo_req_with_proxy("POST", f"{OO_BFF}/checkpoint/token", h6, b"{}", timeout=12, proxy_str=proxy_str)
+            r6 = _oo_req_with_proxy("POST", f"{OO_BFF}/checkpoint/token", h6, b"{}", timeout=15, proxy_str=proxy_str)
             if r6 is None: return 0, {}
             _, rh6, _ = r6
             nonce = rh6.get("x-nonce-id") or rh6.get("X-Nonce-Id") or ""
@@ -1036,7 +1032,7 @@ def ooredoo_refresh_token_sync(msisdn, rt, device, uid):
         h.update({"content-type":"application/x-www-form-urlencoded",
                   "x-native-integrity-token":INTEGRITY_1,
                   "x-path":"/api/auth/realms/myooredoo/protocol/openid-connect/token","x-method":"POST"})
-        r = _oo_req_with_proxy("POST", f"{OO_BFF}/checkpoint/token", h, b"{}", timeout=12, proxy_str=proxy_str)
+        r = _oo_req_with_proxy("POST", f"{OO_BFF}/checkpoint/token", h, b"{}", timeout=15, proxy_str=proxy_str)
         if r is None:
             _release_oo_proxy(uid, "refresh_proxy_fail"); continue
         _, rh, _ = r
@@ -1089,63 +1085,112 @@ def oo_activate_snapchat(msisdn, at, meta, uid):
     return "error"
 
 def oo_activate_ramadan_72gb(msisdn, at, meta, uid):
-    """v6.7: POST فقط — 60 محاولة، يتوقف فقط على 200/401/404"""
-    iid_val = meta.get("tok_instance_id") or _iid()
-    psig = meta.get("tok_plat_sig") or _pld(iid_val)
+    """v6.8.4:
+    • device-id من JWT مباشرة (سبب 401 السابق)
+    • إصلاح None unpack
+    • نفس البروكسي 4 محاولات
+    • 200 = نجاح، 401 = تبديل proxy وجرّب
+    """
+    jwt_device_id = _exdid(at)
+    if not jwt_device_id:
+        logging.error(f"[OO-RAMADAN-72GB] {msisdn} ❌ device-id missing in JWT")
+        return {"status": "unauthorized", "data": {"_error": "no_device_id_in_jwt"}}
+
+    iid_val = jwt_device_id
+    psig = _pld(iid_val)
     fp = meta.get("tok_fingerprint") or _fp()
 
     h = {
-        "x-msisdn": msisdn, "user-agent": "Dart/3.11 (dart:io)",
-        "x-device-fingerprint": fp, "accept-encoding": "gzip",
+        "x-msisdn": msisdn,
+        "user-agent": "Dart/3.11 (dart:io)",
+        "x-device-fingerprint": fp,
+        "accept-encoding": "gzip",
         "x-platform-origin": "mobile-android",
         "authorization": f"Bearer {at}",
         "x-correlation-id": _corr(),
         "content-type": "application/json; charset=utf-8",
-        "platform": "android", "x-version": "1.5.17",
-        "x-signature": X_SIG_RAMADAN, "accept": "*/*",
+        "platform": "android",
+        "x-version": "1.5.17",
+        "x-signature": X_SIG_RAMADAN,
+        "accept": "*/*",
         "x-platform-data-signature": psig,
-        "x-timestamp": _now_ms(), "x-instance-id": iid_val,
+        "x-timestamp": _now_ms(),
+        "x-instance-id": iid_val,
     }
     body = json.dumps({"couponCode": ""}, separators=(",", ":"))
 
     MAX_ATTEMPTS = OO_72GB_MAX_ATTEMPTS
-    tried = set()
-    wait = 2.0
+    SAME_PROXY_ATTEMPTS = 4
+    wait = 2.5
     last_c, last_resp = 0, {}
 
+    current_proxy = None
+    attempts_on_current = 0
+    tried_proxies = set()
+
     for attempt in range(MAX_ATTEMPTS):
-        if len(tried) >= 40:
-            tried.clear()
-        proxy_str = _oo_user_to_proxy.get(uid)
-        if not proxy_str or proxy_str in tried:
-            proxy_str = _get_oo_proxy_for_user(uid, exclude=tried)
-        if proxy_str:
-            tried.add(proxy_str)
+        if current_proxy is None or attempts_on_current >= SAME_PROXY_ATTEMPTS:
+            if current_proxy:
+                tried_proxies.add(current_proxy)
+                _release_oo_proxy(uid, reason="switch")
+            if len(tried_proxies) >= 40:
+                tried_proxies.clear()
+            current_proxy = _get_oo_proxy_for_user(uid, exclude=tried_proxies)
+            attempts_on_current = 0
+            if not current_proxy:
+                break
+            logging.info(f"[OO-RAMADAN-72GB] {msisdn} 🔄 NEW proxy={_mask_oo_proxy(current_proxy)}")
+
+        attempts_on_current += 1
+        proxy_str = current_proxy
+
+        h["x-timestamp"] = _now_ms()
+        h["x-correlation-id"] = _corr()
+
         try:
-            c, _, resp = _oo_req_with_proxy("POST", f"{OO_BFF}/ramadan/activate", h, body,
-                                            timeout=30, proxy_str=proxy_str)
+            r = _oo_req_with_proxy("POST", f"{OO_BFF}/ramadan/activate", h, body,
+                                   timeout=30, proxy_str=proxy_str)
+            if r is None:
+                last_c, last_resp = 0, {"_error": "response_none"}
+                logging.info(
+                    f"[OO-RAMADAN-72GB] {msisdn} attempt {attempt+1}/{MAX_ATTEMPTS} "
+                    f"proxy={_mask_oo_proxy(proxy_str)} "
+                    f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → NONE"
+                )
+                time.sleep(wait); wait = min(wait * 1.3, 12)
+                continue
+            c, _, resp = r
             last_c, last_resp = c, resp
             logging.info(
                 f"[OO-RAMADAN-72GB] {msisdn} uid={uid} attempt {attempt+1}/{MAX_ATTEMPTS} "
-                f"proxy={_mask_oo_proxy(proxy_str) if proxy_str else 'direct'} "
-                f"→ {c} | {str(resp)[:200]}"
+                f"proxy={_mask_oo_proxy(proxy_str)} "
+                f"({attempts_on_current}/{SAME_PROXY_ATTEMPTS}) → {c} | {str(resp)[:150]}"
             )
         except Exception as e:
             logging.error(f"[OO-RAMADAN-72GB] {msisdn} attempt {attempt+1} exc: {e}")
             last_c, last_resp = 0, {"_error": str(e)[:100]}
+            time.sleep(wait); wait = min(wait * 1.3, 12)
+            continue
 
         if last_c in (200, 201):
             resp_str = str(last_resp).lower()
             if any(k in resp_str for k in ("already", "déjà", "deja", "مفعل", "duplicate", "exist")):
                 return {"status": "already", "data": last_resp}
             return {"status": "ok", "data": last_resp}
-        if last_c == 401: return {"status": "unauthorized", "data": last_resp}
-        if last_c == 404: return {"status": "not_allowed", "data": last_resp}
+
+        if last_c == 401:
+            if len(tried_proxies) < 2 and attempt < 8:
+                logging.info(f"[OO-RAMADAN-72GB] {msisdn} ⚠️ 401 → switching proxy")
+                attempts_on_current = SAME_PROXY_ATTEMPTS
+                time.sleep(wait); wait = min(wait * 1.3, 10)
+                continue
+            return {"status": "unauthorized", "data": last_resp}
+
+        if last_c == 404:
+            return {"status": "not_allowed", "data": last_resp}
 
         _mark_oo_proxy_fail(proxy_str, f"http{last_c}")
-        if attempt < MAX_ATTEMPTS - 1:
-            time.sleep(wait + random.uniform(0, 1))
-            wait = min(wait * 1.3, 12)
+        time.sleep(wait); wait = min(wait * 1.3, 12)
 
     return {"status": "error", "code": last_c, "data": last_resp}
 
@@ -1183,6 +1228,33 @@ def oo_purchase_20dzd_1go(msisdn, at, meta, uid):
     if c == 401: return {"status": "purchase_blocked"}
     return {"status": "error", "code": c}
 
+def oo_purchase_free_2gb(msisdn, at, meta, uid):
+    body_simple = json.dumps({"bundleCode": "BTL_24H_DATA_Free_2Go"}, separators=(",", ":"))
+    body_full = json.dumps({"bundleCode": "BTL_24H_DATA_Free_2Go",
+                            "validity": "day", "validityAmount": "1"}, separators=(",", ":"))
+    endpoints = [f"{OO_BFF}/cvm/bundlePurchase", f"{OO_BFF}/cvm/dynamic-bundle-purchase"]
+    bodies = [body_simple, body_full]
+    already_seen = None
+    for round_idx in range(2):
+        if round_idx > 0: time.sleep(2)
+        for ep_label, url in enumerate(endpoints):
+            for body_label, body in enumerate(bodies):
+                try:
+                    h = _web_hdrs(msisdn, at, meta, "application/json; charset=utf-8")
+                    c, _, resp = _oo_req_with_proxy("POST", url, h, body, timeout=25,
+                                                    proxy_str=_oo_user_to_proxy.get(uid))
+                    logging.info(f"[OO-FREE-2GB] {msisdn} uid={uid} r{round_idx+1}/{ep_label}/{body_label} → {c}")
+                except Exception as e:
+                    c, resp = 0, {"_error": str(e)[:100]}
+                if c in (200, 201): return {"status": "ok", "data": resp}
+                resp_str = str(resp).lower()
+                if any(k in resp_str for k in ("already","déjà","purchased","subscribed","duplicate","exist")):
+                    already_seen = resp; continue
+                if c == 401: return {"status": "unauthorized", "data": resp}
+                if c == 429: time.sleep(3); break
+    if already_seen is not None: return {"status": "already", "data": already_seen}
+    return {"status": "error", "data": None}
+
 # ==================== Sessions ====================
 def oo_save(uid, d):
     (SESSIONS_DIR / f"oo_{uid}.json").write_text(json.dumps(d, ensure_ascii=False))
@@ -1203,6 +1275,27 @@ def dz_save_session(uid, phone, token):
 def dz_clear_session(uid):
     try:
         f = SESSIONS_DIR / f"dz_{uid}.json"
+        if f.exists(): f.unlink()
+    except: pass
+
+def oo_free2gb_save(uid, msisdn):
+    try:
+        (SESSIONS_DIR / f"free2gb_{uid}.json").write_text(
+            json.dumps({"msisdn": msisdn, "last": time.time()}, ensure_ascii=False))
+    except: pass
+
+def oo_free2gb_get_last(uid, msisdn):
+    try:
+        f = SESSIONS_DIR / f"free2gb_{uid}.json"
+        if not f.exists(): return 0
+        d = json.loads(f.read_text())
+        if d.get("msisdn") == msisdn: return d.get("last", 0)
+    except: pass
+    return 0
+
+def oo_free2gb_clear(uid):
+    try:
+        f = SESSIONS_DIR / f"free2gb_{uid}.json"
         if f.exists(): f.unlink()
     except: pass
 
@@ -1295,6 +1388,130 @@ def oo_proxy_cleaner():
             for u in expired: _release_oo_proxy(u, reason="timeout")
         except: pass
 
+# ==================== Server Monitor ====================
+SERVER_STATUS_FILE = BASE_DIR / "server_status.json"
+_server_status = {"dz": True, "oo": True, "changed_at": time.time()}
+_server_status_lock = threading.Lock()
+
+def _load_server_status():
+    global _server_status
+    try:
+        if SERVER_STATUS_FILE.exists():
+            _server_status = json.loads(SERVER_STATUS_FILE.read_text())
+    except: pass
+
+def _save_server_status():
+    try:
+        SERVER_STATUS_FILE.write_text(json.dumps(_server_status, ensure_ascii=False))
+    except: pass
+
+def _check_dz_server_alive():
+    for method, path in [("GET", "/oauth2/token"), ("GET", "/api/v1/health")]:
+        try:
+            r = _dz_req(method, f"{DJ_BASE}{path}", timeout=10)
+            if r is not None and r.status_code < 500:
+                return True
+        except: pass
+    return False
+
+def _check_oo_server_alive():
+    """v6.8.4: أي رد (حتى 401/403/404) = السيرفر شغّال"""
+    for path in ["/actuator/health", "/subscriptions/getAccountInfo", "/"]:
+        try:
+            c, _, _ = _oo_req_direct("GET", f"{OO_BFF}{path}",
+                                     {"x-msisdn": "213000000000",
+                                      "user-agent": "Dart/3.11 (dart:io)",
+                                      "x-version": "1.5.17"}, 15)
+            if c and c > 0:
+                return True
+        except: pass
+    return False
+
+def _notify_users_server_back(network):
+    if not MAIN_EVENT_LOOP: return
+    async def _send():
+        try:
+            if network == "dz":
+                rows = db_query(
+                    "SELECT DISTINCT user_id FROM numbers WHERE token IS NOT NULL AND token != 'EXPIRED'",
+                    fetchall=True) or []
+                users = [r[0] for r in rows if r and r[0]]
+                msg = (
+                    "🟢 ━━━━━━━━━━━━━━━━ 🟢\n"
+                    "   <b>سيرفر جيزي اشتغل!</b>\n"
+                    "🟢 ━━━━━━━━━━━━━━━━ 🟢\n\n"
+                    "✅ السيرفر رجع نشط الآن\n"
+                    "💡 يمكنك إعادة المحاولة من /start\n\n"
+                    f"📢 {CHANNEL_LINK}"
+                )
+            else:
+                users = []
+                for f in SESSIONS_DIR.glob("oo_*.json"):
+                    try:
+                        u = f.stem.replace("oo_", "")
+                        if u.isdigit(): users.append(int(u))
+                    except: pass
+                msg = (
+                    "🟢 ━━━━━━━━━━━━━━━━ 🟢\n"
+                    "  <b>سيرفر أوريدو اشتغل!</b>\n"
+                    "🟢 ━━━━━━━━━━━━━━━━ 🟢\n\n"
+                    "✅ السيرفر رجع نشط الآن\n"
+                    "💡 يمكنك إعادة المحاولة من /start\n\n"
+                    f"📢 {CHANNEL_LINK}"
+                )
+            sent = 0; failed = 0
+            for u in users:
+                try:
+                    await bot.send_message(u, msg, parse_mode='HTML')
+                    sent += 1
+                    await asyncio.sleep(0.05)
+                except Exception:
+                    failed += 1
+            logging.info(f"[SERVER-MONITOR] 📢 notified {sent}/{len(users)} ({failed} failed) for {network}")
+        except Exception as e:
+            logging.error(f"[SERVER-MONITOR] notify exc: {e}")
+    try:
+        asyncio.run_coroutine_threadsafe(_send(), MAIN_EVENT_LOOP)
+    except Exception as e:
+        logging.error(f"[SERVER-MONITOR] schedule fail: {e}")
+
+def server_monitor_worker():
+    _load_server_status()
+    time.sleep(20)
+    logging.info(f"[SERVER-MONITOR] ▶️ started (prev: dz={_server_status.get('dz')}, oo={_server_status.get('oo')})")
+    while not _stop_threads.is_set():
+        try:
+            dz_alive = _check_dz_server_alive()
+            oo_alive = _check_oo_server_alive()
+            with _server_status_lock:
+                prev_dz = _server_status.get("dz", True)
+                prev_oo = _server_status.get("oo", True)
+                changed = False
+                if prev_dz != dz_alive:
+                    _server_status["dz"] = dz_alive
+                    _server_status["changed_at"] = time.time()
+                    changed = True
+                    if not prev_dz and dz_alive:
+                        logging.warning("[SERVER-MONITOR] 🟢 Djezzy BACK ONLINE → notifying users")
+                        _notify_users_server_back("dz")
+                    elif prev_dz and not dz_alive:
+                        logging.error("[SERVER-MONITOR] 🔴 Djezzy DOWN")
+                if prev_oo != oo_alive:
+                    _server_status["oo"] = oo_alive
+                    _server_status["changed_at"] = time.time()
+                    changed = True
+                    if not prev_oo and oo_alive:
+                        logging.warning("[SERVER-MONITOR] 🟢 Ooredoo BACK ONLINE → notifying users")
+                        _notify_users_server_back("oo")
+                    elif prev_oo and not oo_alive:
+                        logging.error("[SERVER-MONITOR] 🔴 Ooredoo DOWN")
+                if changed:
+                    _save_server_status()
+            time.sleep(180)
+        except Exception as e:
+            logging.error(f"[SERVER-MONITOR] loop exc: {e}", exc_info=True)
+            time.sleep(60)
+
 # ==================== Robustness helpers ====================
 HEALTH_FILE = BASE_DIR / "health.txt"
 _WORKERS = {}
@@ -1359,7 +1576,7 @@ def _install_signal_handlers():
     def _shutdown(signum, frame):
         logging.warning(f"[SIGNAL] Received {signum}, graceful shutdown...")
         _stop_threads.set()
-        try: save_steps(); save_pending_72gb()
+        try: save_steps()
         except: pass
     try:
         signal.signal(signal.SIGTERM, _shutdown)
@@ -1457,14 +1674,19 @@ async def send_result(uid, text, back_cb="main_menu"):
 
 async def notify_group_success(offer_name, network):
     if not NOTIFY_GROUP: return
-    try:
-        text = (f"✅ <b>تفعيل ناجح</b>\n━━━━━━━━━━━━━━━━\n"
-                f"🌐 <b>الشبكة:</b> {network}\n"
-                f"🎁 <b>العرض:</b> {offer_name}\n"
-                f"⏱️ <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}")
-        await bot.send_message(NOTIFY_GROUP, text, parse_mode='HTML')
-    except Exception as e:
-        logging.error(f"[NOTIFY-GROUP] {e}")
+    text = (f"✅ <b>تفعيل ناجح</b>\n━━━━━━━━━━━━━━━━\n"
+            f"🌐 <b>الشبكة:</b> {network}\n"
+            f"🎁 <b>العرض:</b> {offer_name}\n"
+            f"⏱️ <b>الوقت:</b> {datetime.now().strftime('%H:%M:%S')}")
+    for attempt in range(3):
+        try:
+            await bot.send_message(NOTIFY_GROUP, text, parse_mode='HTML')
+            return
+        except Exception as e:
+            logging.warning(f"[NOTIFY-GROUP] attempt {attempt+1}/3 fail: {e}")
+            if attempt < 2:
+                await asyncio.sleep(2 ** attempt)
+    logging.error(f"[NOTIFY-GROUP] ❌ FAILED after 3 attempts | {offer_name}")
 
 def subscription_markup():
     m = InlineKeyboardMarkup(row_width=1)
@@ -1528,11 +1750,15 @@ def get_stats_text():
     with _oo_proxy_lock:
         used = len(_oo_proxy_in_use)
         banned = sum(1 for h in _oo_proxy_health.values() if h.get("banned_until", 0) > time.time())
+    with _server_status_lock:
+        dz_st = "🟢" if _server_status.get("dz", True) else "🔴"
+        oo_st = "🟢" if _server_status.get("oo", True) else "🔴"
     return (f"📊 <b>الإحصائيات</b>\n👥 {users} | 📱 {dz}\n"
-            f"🔌 Proxies: {used}/{len(OO_PROXY_POOL)} | 🚫 {banned}\n\n"
+            f"🔌 Proxies: {used}/{len(OO_PROXY_POOL)} | 🚫 {banned}\n"
+            f"📡 Servers: DZ {dz_st} | OO {oo_st}\n\n"
             f"🔴 جيزي:\n  🔥 72G نوفمبر: {s[15]}\n  🎁 2G أسبوعي: {s[0]}\n  💰 العروض: {s[2]}\n\n"
             f"🟠 أوريدو:\n  🔐: {s[3]}  👻: {s[4]}\n"
-            f"  ⚡ 20دج-1Go: {s[9]}\n  🔥 72Go: {s[14]}")
+            f"  ⚡ 20دج-1Go: {s[9]}\n  🎁 2Go FREE: {s[13]}\n  🔥 72Go: {s[14]}")
 
 def oo_dynamic_menu(services, uid=None):
     m = InlineKeyboardMarkup(row_width=1)
@@ -1541,6 +1767,7 @@ def oo_dynamic_menu(services, uid=None):
     m.add(InlineKeyboardButton("📋 عروضي", callback_data="oo_my_offers"))
     m.add(InlineKeyboardButton("👻 سناب", callback_data="oo_snap"))
     m.add(InlineKeyboardButton("⚡ 20 دج — 1Go — 24H", callback_data="oo_quick_20_1g"))
+    m.add(InlineKeyboardButton("🎁 2 جيجا مجاني — 24H", callback_data="oo_quick_free_2gb"))
     m.add(InlineKeyboardButton("🔄 تغيير الرقم", callback_data="oo_change"))
     m.add(InlineKeyboardButton("🗑️ حذف الرقم المحفوظ", callback_data="delete_my_number"))
     if uid and uid == ADMIN_ID:
@@ -1551,6 +1778,7 @@ def oo_dynamic_menu(services, uid=None):
 def admin_menu_markup():
     m = InlineKeyboardMarkup(row_width=2)
     m.add(InlineKeyboardButton("📋 آخر 30 سطر", callback_data="admin_log"))
+    m.add(InlineKeyboardButton("🎁 سجل 2Go", callback_data="admin_log_2g"))
     m.add(InlineKeyboardButton("❌ الأخطاء", callback_data="admin_log_err"))
     m.add(InlineKeyboardButton("🗑️ مسح السجل", callback_data="admin_log_clear"))
     m.add(InlineKeyboardButton("↩️ رجوع", callback_data="main_menu"))
@@ -1564,18 +1792,14 @@ async def _dz_request_new_otp(uid, phone):
         mm.add(InlineKeyboardButton("🔄 إعادة إرسال", callback_data=f"resend_otp_{phone}"))
         await send_temp(uid, f"⏳ <b>انتظر {remaining} ثانية</b>", ttl=8, reply_markup=mm)
         return
-    sending = await send_temp(uid,
-        "🔄 <b>جاري إرسال رمز جديد...</b>\n\n"
-        "📡 محاولات متعددة — قد يستغرق دقيقة", ttl=200)
+    sending = await send_temp(uid, "🔄 <b>جاري إرسال رمز جديد...</b>", ttl=30)
     ok = await asyncio.to_thread(dj_request_otp, phone)
     await safe_delete(uid, sending.message_id if sending else None)
-    if ok is True:
+    if ok:
         otp_msg = await send_otp_prompt(uid, display, phone)
         user_steps[uid] = {"step": "dz_verify_otp", "phone": phone, "display": display,
                            "otp_msg_id": otp_msg.message_id if otp_msg else None,
                            "last_activity": time.time()}
-    elif ok == "IN_PROGRESS":
-        await send_temp(uid, "⏳ <b>محاولة جارية بالفعل</b>", ttl=8)
     else:
         await send_temp(uid, f"⚠️ <b>انتهت الجلسة</b>\n📱 <code>{display}</code>", ttl=15)
 
@@ -1768,7 +1992,6 @@ async def _update_oo_menu_bg(uid, user, msg_id):
                                     reply_markup=oo_dynamic_menu(svc, uid), parse_mode='HTML')
     except: pass
 
-# ==================== OO 72GB Background Worker ====================
 def _oo_72gb_background_worker(uid, msisdn, at, meta):
     try:
         logging.info(f"[OO-72GB-BG] ▶️ START uid={uid} msisdn={msisdn}")
@@ -1787,7 +2010,8 @@ def _oo_72gb_background_worker(uid, msisdn, at, meta):
     async def _notify():
         try:
             if status == "ok":
-                inc_stat("oo_72gb"); _mark_oo_proxy_success(uid)
+                inc_stat("oo_72gb")
+                _mark_oo_proxy_success(uid)
                 await notify_group_success("72 جيجا (نوفمبر)", "Ooredoo 🟠")
                 await send_result(uid,
                     f"🎉 ━━━━━━━━━━━━━━━━ 🎉\n"
@@ -1828,7 +2052,6 @@ def _oo_72gb_background_worker(uid, msisdn, at, meta):
         asyncio.run_coroutine_threadsafe(_notify(), MAIN_EVENT_LOOP)
     except Exception as e:
         logging.error(f"[OO-72GB-BG] schedule notify fail: {e}")
-
 # ==================== Admin Logs ====================
 @bot.message_handler(commands=['log'], chat_types=['private'])
 async def cmd_log(message):
@@ -1840,6 +2063,13 @@ async def cmd_log(message):
     lines = get_logs(n)
     if not lines: await bot.send_message(message.chat.id, "📭 فارغ"); return
     await bot.send_message(message.chat.id, format_logs_for_telegram(lines, f"آخر {len(lines)}"), parse_mode='HTML')
+
+@bot.message_handler(commands=['log2g'], chat_types=['private'])
+async def cmd_log2g(message):
+    if message.from_user.id != ADMIN_ID: return
+    lines = get_logs(50, "OO-FREE-2GB")
+    if not lines: await bot.send_message(message.chat.id, "📭 فارغ"); return
+    await bot.send_message(message.chat.id, format_logs_for_telegram(lines, "سجل 2Go"), parse_mode='HTML')
 
 @bot.message_handler(commands=['logerr'], chat_types=['private'])
 async def cmd_logerr(message):
@@ -1909,10 +2139,11 @@ async def _cb_inner(call):
             mm.add(InlineKeyboardButton("🔄 إعادة", callback_data=f"resend_otp_{target}"))
             await send_temp(uid, f"⏳ <b>{remaining} ثانية</b>", ttl=8, reply_markup=mm); return
         if target.startswith("2135"):
-            # v6.7: أوريدو مفتوح
             oo_clear(uid)
             digits = "0" + target[3:]
-            sending = await send_temp(uid, "🔄 <b>جاري إرسال الرمز...</b>", ttl=30)
+            sending = await send_temp(uid,
+                "🔄 <b>جاري إرسال الرمز...</b>\n\n"
+                "📡 السيرفر ثقيل — قد يستغرق حتى 30 ثانية", ttl=180)
             result = await asyncio.to_thread(ooredoo_send_otp_sync, target, uid)
             await safe_delete(uid, sending.message_id if sending else None)
             if not result.get("otp_sent"):
@@ -1925,19 +2156,15 @@ async def _cb_inner(call):
         else:
             db_query("UPDATE numbers SET token=NULL WHERE phone=? AND user_id=?", (target, uid))
             dz_clear_session(uid)
-            sending = await send_temp(uid,
-                "🔄 <b>جاري إرسال الرمز...</b>\n\n"
-                "📡 محاولات متعددة — قد يستغرق دقيقة", ttl=200)
+            sending = await send_temp(uid, "🔄 <b>جاري إرسال الرمز...</b>", ttl=30)
             ok2 = await asyncio.to_thread(dj_request_otp, target)
             await safe_delete(uid, sending.message_id if sending else None)
-            if ok2 is True:
+            if ok2:
                 display = "0" + target[3:]
                 otp_msg = await send_otp_prompt(uid, display, target)
                 user_steps[uid] = {"step": "dz_verify_otp", "phone": target, "display": display,
                                    "otp_msg_id": otp_msg.message_id if otp_msg else None,
                                    "last_activity": time.time()}
-            elif ok2 == "IN_PROGRESS":
-                await send_temp(uid, "⏳ <b>محاولة جارية بالفعل</b>", ttl=8)
             else:
                 await send_temp(uid, "❌ <b>تعذر الإرسال</b>\n\n💡 جرّب بعد دقيقة", ttl=10)
         return
@@ -1958,6 +2185,10 @@ async def _cb_inner(call):
         if uid != ADMIN_ID: return
         lines = get_logs(30)
         await bot.send_message(uid, format_logs_for_telegram(lines, f"آخر {len(lines)}") if lines else "📭", parse_mode='HTML'); return
+    if call.data == "admin_log_2g":
+        if uid != ADMIN_ID: return
+        lines = get_logs(50, "OO-FREE-2GB")
+        await bot.send_message(uid, format_logs_for_telegram(lines, "سجل 2Go") if lines else "📭", parse_mode='HTML'); return
     if call.data == "admin_log_err":
         if uid != ADMIN_ID: return
         with _LOG_LOCK: all_lines = list(_LOG_BUFFER)
@@ -1989,13 +2220,13 @@ async def _cb_inner(call):
 
     if call.data == "delete_my_number_ok":
         db_query("DELETE FROM numbers WHERE user_id=?", (uid,))
-        oo_clear(uid); dz_clear_session(uid)
+        oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
         _release_oo_proxy(uid, "deleted")
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
         await send_temp(uid, "✅ <b>تم الحذف</b>", ttl=5); return
 
     if call.data == "change_phone":
-        oo_clear(uid); dz_clear_session(uid)
+        oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
         _release_oo_proxy(uid, "change")
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
         await send_welcome(uid); return
@@ -2144,7 +2375,7 @@ async def oo_cb_handler(call):
     user = oo_load(uid)
 
     if data == "oo_change":
-        oo_clear(uid); dz_clear_session(uid)
+        oo_clear(uid); dz_clear_session(uid); oo_free2gb_clear(uid)
         _release_oo_proxy(uid, "change")
         user_steps[uid] = {"step": "await_phone", "last_activity": time.time()}
         await send_welcome(uid); return
@@ -2177,8 +2408,11 @@ async def oo_cb_handler(call):
     if data == "oo_my_offers":
         inc_stat("oo_offers_view")
         r = await asyncio.to_thread(oo_get_active, ms, at, meta, uid)
-        if r["status"] != "ok": await send_temp(uid, "❌", ttl=8); return
-        await bot.send_message(uid, "📋 <b>عروضك</b>\n📭 لا باقات نشطة", reply_markup=back_btn("oo_back_menu"), parse_mode='HTML'); return
+        if r["status"] != "ok":
+            await send_temp(uid, "❌", ttl=8); return
+        await bot.send_message(uid, "📋 <b>عروضك</b>\n📭 لا باقات نشطة",
+                               reply_markup=back_btn("oo_back_menu"), parse_mode='HTML')
+        return
 
     if data == "oo_snap":
         r = await asyncio.to_thread(oo_activate_snapchat, ms, at, meta, uid)
@@ -2186,9 +2420,34 @@ async def oo_cb_handler(call):
             inc_stat("oo_snap"); _mark_oo_proxy_success(uid)
             await notify_group_success("Snapchat", "Ooredoo 🟠")
             await send_result(uid, f"✅ <b>سناب مفعّل!</b>\n📱 <code>{o_mask(ms)}</code>", "oo_back_menu")
-        elif r == "already_active": await send_temp(uid, "⚠️ مفعّلة مسبقاً", ttl=8)
-        else: await send_temp(uid, "❌", ttl=8)
+        elif r == "already_active":
+            await send_temp(uid, "⚠️ مفعّلة مسبقاً", ttl=8)
+        else:
+            await send_temp(uid, "❌", ttl=8)
         return
+
+    if data == "oo_quick_free_2gb":
+        last = oo_free2gb_get_last(uid, ms)
+        elapsed = time.time() - last if last else 0
+        if last and elapsed < COOLDOWN_FREE_2GB_OO:
+            remaining = int(COOLDOWN_FREE_2GB_OO - elapsed)
+            hh = remaining // 3600; mmn = (remaining % 3600) // 60
+            await send_temp(uid, f"⏰ <b>راك مفعّل</b>\n⏳ {hh} س {mmn} د", ttl=10); return
+        await send_temp(uid, "⏳ <b>جاري التفعيل...</b>", ttl=30)
+        r = await asyncio.to_thread(oo_purchase_free_2gb, ms, at, meta, uid)
+        status = r.get("status", "error")
+        if status == "ok":
+            inc_stat("oo_free_2gb"); oo_free2gb_save(uid, ms); _mark_oo_proxy_success(uid)
+            await notify_group_success("2Go مجاني", "Ooredoo 🟠")
+            await send_result(uid, f"🎉 <b>مبروك!</b>\n✅ 2 جيجا\n📱 <code>{o_mask(ms)}</code>\n💡 <code>*200#</code>", "oo_back_menu")
+            return
+        if status == "already":
+            oo_free2gb_save(uid, ms); await send_temp(uid, "⏰ <b>راك مفعّل من قبل</b>", ttl=10); return
+        if status == "unauthorized":
+            mm = InlineKeyboardMarkup()
+            mm.add(InlineKeyboardButton("🔄 إعادة الدخول", callback_data="oo_change"))
+            await send_temp(uid, "🔐 <b>انتهت الجلسة</b>", ttl=10, reply_markup=mm); return
+        await send_temp(uid, "❌ <b>فشل</b>", ttl=10); return
 
     if data == "oo_quick_72gb":
         with _oo_72gb_jobs_lock:
@@ -2199,6 +2458,7 @@ async def oo_cb_handler(call):
                     "📬 سيصلك إشعار عند الانتهاء", ttl=10)
                 return
             _oo_72gb_jobs[uid] = {"msisdn": ms, "started_at": time.time()}
+
         await bot.send_message(uid,
             "⚡ ━━━━━━━━━━━━━━━━ ⚡\n"
             "  <b>جاري التفعيل في الخلفية</b>\n"
@@ -2208,6 +2468,7 @@ async def oo_cb_handler(call):
             "📬 سيصلك إشعار هنا عند الانتهاء\n\n"
             "<i>يمكنك استخدام البوت بشكل طبيعي الآن</i>",
             parse_mode='HTML')
+
         threading.Thread(
             target=_oo_72gb_background_worker,
             args=(uid, ms, at, meta),
@@ -2219,11 +2480,13 @@ async def oo_cb_handler(call):
         r = await asyncio.to_thread(oo_check_balance, ms, at, meta, uid)
         try: balance = float(r.get("data", {}).get("accountBalance", 0) or 0)
         except: balance = 0
-        if balance < 20: await send_temp(uid, f"❌ رصيد {balance}", ttl=8); return
+        if balance < 20:
+            await send_temp(uid, f"❌ رصيد {balance}", ttl=8); return
         kb = InlineKeyboardMarkup(row_width=2)
         kb.add(InlineKeyboardButton("✅ تأكيد", callback_data="oo_quick_20_1g_ok"),
                InlineKeyboardButton("❌ إلغاء", callback_data="oo_back_menu"))
-        await bot.send_message(uid, f"⚡ <b>20دج — 1Go — 24H</b>\n💰 {balance} دج", reply_markup=kb, parse_mode='HTML')
+        await bot.send_message(uid, f"⚡ <b>20دج — 1Go — 24H</b>\n💰 {balance} دج",
+                               reply_markup=kb, parse_mode='HTML')
         return
 
     if data == "oo_quick_20_1g_ok":
@@ -2240,10 +2503,12 @@ async def oo_cb_handler(call):
 @bot.message_handler(func=lambda m: True, content_types=['text'], chat_types=['private'])
 async def handle_text(message):
     _last_heartbeat[0] = time.time()
-    try: await _text_inner(message)
+    try:
+        await _text_inner(message)
     except Exception as e:
         logging.error(f"[TEXT-CRASH] {message.from_user.id}: {e}", exc_info=True)
-        try: await bot.send_message(message.chat.id, "⚠️ خطأ مؤقت")
+        try:
+            await bot.send_message(message.chat.id, "⚠️ خطأ مؤقت")
         except: pass
 
 async def _text_inner(message):
@@ -2267,7 +2532,8 @@ async def _text_inner(message):
         await send_welcome(uid); return
 
     if step.get("step") == "await_phone":
-        if not is_phone: await send_temp(uid, "❌ رقم غير صحيح", ttl=8); return
+        if not is_phone:
+            await send_temp(uid, "❌ رقم غير صحيح", ttl=8); return
         msisdn = "213" + digits[1:]
 
         if digits.startswith(("07", "06")):
@@ -2275,35 +2541,35 @@ async def _text_inner(message):
             if row and row[0] and row[0] != "EXPIRED":
                 user_steps[uid] = {"step": "dz_menu", "last_activity": now}
                 await send_dz_menu(uid, msisdn); return
-            sending = await send_temp(uid,
-                "🔄 <b>جاري إرسال الرمز...</b>\n\n"
-                "📡 محاولات متعددة — قد يستغرق دقيقة", ttl=200)
+            sending = await send_temp(uid, "🔄 <b>جاري إرسال الرمز...</b>\n\n<i>يرجى الانتظار قليلاً</i>", ttl=30)
             ok = await asyncio.to_thread(dj_request_otp, msisdn)
             await safe_delete(uid, sending.message_id if sending else None)
-            if ok is True:
+            if ok:
                 otp_msg = await send_otp_prompt(uid, digits, msisdn)
                 user_steps[uid] = {"step": "dz_verify_otp", "phone": msisdn, "display": digits,
                                    "otp_msg_id": otp_msg.message_id if otp_msg else None,
                                    "last_activity": now}
-            elif ok == "IN_PROGRESS":
-                await send_temp(uid, "⏳ <b>محاولة جارية لنفس الرقم</b>\n\n💡 انتظر 30 ثانية", ttl=10)
             else:
-                await send_temp(uid, "❌ <b>تعذر الإرسال</b>\n\n💡 حاول مجدداً بعد دقيقة", ttl=15)
+                await send_temp(uid, "❌ <b>تعذر إرسال الرمز</b>\n\n💡 انتظر دقيقة ثم حاول مجدداً", ttl=15)
             return
 
         if digits.startswith("05"):
-            # v6.7: أوريدو مفتوح
             existing = oo_load(uid)
             if existing and existing.get("msisdn") == msisdn and existing.get("access_token"):
                 user_steps[uid] = {"step": "oo_menu", "last_activity": now}
                 await send_oo_menu(uid, existing); return
-            sending = await send_temp(uid, "🔄 <b>جاري إرسال الرمز...</b>", ttl=30)
+            sending = await send_temp(uid,
+                "🔄 <b>جاري إرسال الرمز...</b>\n\n"
+                "📡 السيرفر ثقيل — قد يستغرق حتى 30 ثانية\n"
+                "⏳ لا تغلق البوت", ttl=180)
             result = await asyncio.to_thread(ooredoo_send_otp_sync, msisdn, uid)
             await safe_delete(uid, sending.message_id if sending else None)
             if not result.get("otp_sent"):
                 reason = result.get("reason", "")
                 if reason == "rate_limit":
                     await send_temp(uid, "⏳ <b>تجاوزت الحد</b>\n\n💡 حاول بعد 5 دقائق", ttl=15)
+                elif reason == "overall_timeout":
+                    await send_temp(uid, "⏱️ <b>انتهت مدة المحاولات</b>\n\n💡 حاول مجدداً", ttl=15)
                 else:
                     await send_temp(uid, "❌ <b>تعذر الإرسال</b>\n\n💡 جرّب بعد دقيقة", ttl=15)
                 return
@@ -2315,7 +2581,8 @@ async def _text_inner(message):
 
     if step.get("step") == "oo_await_otp":
         m = re.search(r"\b(\d{6})\b", text)
-        if not m: await send_temp(uid, "⚠️ <b>أدخل 6 أرقام فقط</b>", ttl=5); return
+        if not m:
+            await send_temp(uid, "⚠️ <b>أدخل 6 أرقام فقط</b>", ttl=5); return
         otp = m.group(1)
         ms = step.get("msisdn"); device = step.get("device", {})
         await safe_delete(uid, step.get("otp_msg_id"))
@@ -2332,7 +2599,9 @@ async def _text_inner(message):
         oo_save(uid, user); inc_stat("oo_logins")
         await send_temp(uid, "✅ <b>تم التأكيد بنجاح</b>\n\n🎉 مرحباً بك", ttl=3)
         user_steps[uid] = {"step": "oo_menu", "last_activity": time.time()}
-        await asyncio.sleep(1); await send_oo_menu(uid, user); return
+        await asyncio.sleep(1)
+        await send_oo_menu(uid, user)
+        return
 
     if step.get("step") == "dz_verify_otp":
         if not text.isdigit() or len(text) != 6:
@@ -2350,7 +2619,8 @@ async def _text_inner(message):
             dz_save_session(uid, phone, token); inc_stat("dz_logins")
             await send_temp(uid, "✅ <b>تم التأكيد بنجاح</b>\n\n🎉 مرحباً بك في موح بوت", ttl=3)
             user_steps[uid] = {"step": "dz_menu", "last_activity": time.time()}
-            await asyncio.sleep(1); await send_dz_menu(uid, phone)
+            await asyncio.sleep(1)
+            await send_dz_menu(uid, phone)
         else:
             await send_temp(uid, "❌ <b>الرمز خاطئ</b>\n\n💡 اضغط /start لإعادة المحاولة", ttl=8)
         return
@@ -2371,15 +2641,19 @@ def _install_global_handlers():
         loop = asyncio.get_running_loop()
         def _ex_handler(_loop, context):
             exc = context.get("exception")
-            if exc: logging.error(f"[GLOBAL-LOOP-ERR] {type(exc).__name__}: {exc}")
-            else: logging.error(f"[GLOBAL-LOOP-ERR] {context.get('message')}")
+            if exc:
+                logging.error(f"[GLOBAL-LOOP-ERR] {type(exc).__name__}: {exc}")
+            else:
+                logging.error(f"[GLOBAL-LOOP-ERR] {context.get('message')}")
         loop.set_exception_handler(_ex_handler)
     except Exception as e:
         logging.error(f"[GLOBAL-HANDLERS] {e}")
 
 async def _run_polling_once():
-    try: await bot.remove_webhook()
-    except Exception as e: logging.warning(f"[POLL] remove_webhook: {e}")
+    try:
+        await bot.remove_webhook()
+    except Exception as e:
+        logging.warning(f"[POLL] remove_webhook: {e}")
     logging.warning("[POLL] ▶️ infinity_polling starting...")
     await bot.infinity_polling(skip_pending=True, timeout=30)
     logging.warning("[POLL] ⚠️ returned unexpectedly")
@@ -2396,16 +2670,19 @@ async def _polling_supervisor():
                 await asyncio.sleep(30)
                 now = time.time()
                 if now - started > RESTART_TIMEOUT:
-                    logging.warning(f"[SUPERVISOR] ⏰ restart"); break
+                    logging.warning(f"[SUPERVISOR] ⏰ restart (hourly)")
+                    break
                 if now - _last_heartbeat[0] > STUCK_THRESHOLD:
                     try:
                         await asyncio.wait_for(bot.get_me(), timeout=15)
                         _last_heartbeat[0] = time.time()
                     except Exception as e:
-                        logging.error(f"[SUPERVISOR] ❌ API dead ({e})"); break
+                        logging.error(f"[SUPERVISOR] ❌ API dead ({e})")
+                        break
             if not task.done():
                 task.cancel()
-                try: await asyncio.wait_for(task, timeout=10)
+                try:
+                    await asyncio.wait_for(task, timeout=10)
                 except: pass
         except asyncio.CancelledError:
             task.cancel(); raise
@@ -2414,13 +2691,14 @@ async def _polling_supervisor():
             task.cancel()
             try: await task
             except: pass
-        if not _stop_threads.is_set(): await asyncio.sleep(3)
+        if not _stop_threads.is_set():
+            await asyncio.sleep(3)
 
 async def main():
     global MAIN_EVENT_LOOP
     MAIN_EVENT_LOOP = asyncio.get_running_loop()
     print("=" * 60)
-    print("🤖 البوت v6.7 — Djezzy Robust OTP + Ooredoo 72GB Background")
+    print("🤖 البوت v6.8.4 — 2GB Free + Server Monitor + OTP fix + JWT device-id fix")
     print(f"👤 ADMIN: {ADMIN_ID}")
     print("=" * 60)
     _install_global_handlers()
@@ -2428,23 +2706,20 @@ async def main():
     _install_thread_excepthook()
     user_steps.update(load_steps_saved())
 
-    try:
-        _pending_72gb.clear()
-        save_pending_72gb()
-        logging.info("[72GB] Cleared old pending queue (direct mode active)")
-    except: pass
-
     for fn in (oo_auto_refresh, dz_auto_refresh, steps_saver_worker,
                reset_steps_worker, _proxy_proactive_rotate, oo_proxy_cleaner,
+               server_monitor_worker,
                _heartbeat_worker, _cleanup_worker, _worker_watchdog):
         start_worker(fn)
 
     print("✅ البوت يعمل...")
     while not _stop_threads.is_set():
-        try: await _polling_supervisor()
+        try:
+            await _polling_supervisor()
         except Exception as e:
             logging.error(f"[MAIN] {type(e).__name__}: {e}", exc_info=True)
-        if not _stop_threads.is_set(): await asyncio.sleep(5)
+        if not _stop_threads.is_set():
+            await asyncio.sleep(5)
 
 def _run_forever():
     backoff = 5
@@ -2455,12 +2730,12 @@ def _run_forever():
         except KeyboardInterrupt:
             logging.warning("[RUN] Ctrl+C")
             _stop_threads.set()
-            try: save_steps(); save_pending_72gb()
+            try: save_steps()
             except: pass
             break
         except Exception as e:
             logging.error(f"[RUN] ❌ {type(e).__name__}: {e}", exc_info=True)
-            try: save_steps(); save_pending_72gb()
+            try: save_steps()
             except: pass
         logging.warning(f"[RUN] restarting in {backoff}s...")
         time.sleep(backoff)
