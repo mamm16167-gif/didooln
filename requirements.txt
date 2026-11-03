@@ -3,3 +3,4 @@ requests
 httpx
 urllib3
 aiohttp
+dartio-tls
