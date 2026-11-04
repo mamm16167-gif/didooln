@@ -4,4 +4,7 @@ httpx
 urllib3
 aiohttp
 dartio-tls
-gradio
+gradio==4.44.1
+huggingface-hub==0.26.5
+spaces==0.30.6
+psutil==5.9.8
