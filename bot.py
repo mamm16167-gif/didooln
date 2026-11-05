@@ -9,13 +9,20 @@ from datetime import datetime, timedelta
 from requests.adapters import HTTPAdapter
 from pathlib import Path
 
+# إصلاح مشكل ترميز الإيموجي في اللوغ (الذي ظهر لك على شكل ðŸš€)
+try:
+    sys.stdout.reconfigure(encoding='utf-8')
+    sys.stderr.reconfigure(encoding='utf-8')
+except Exception:
+    pass
+
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger("moody_bot")
 
 # ═══════════════════════════ CONFIG ═══════════════════════════
-BOT_TOKEN = "9059683143:AAGRZ3qvbZIUtXOM6nSWO0qgKuAXTderyeQ"
-ADMIN_ID = 7624712978
+BOT_TOKEN = "7924355653:AAHeIAyfFwEP1L-UtIGmnwo31PXzFWZsjxE"
+ADMIN_ID = 6860937572
 PROOF_CHANNEL_ID = "@ifoekdjdh"  # قروب التفعيلات (لإرسال الإشعارات فقط، غير إجباري)
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
@@ -89,7 +96,6 @@ def _save_async():
 def _load_from_disk():
     global _users, _bot_stats, _maintenance, _forced_channels
     if not os.path.exists(DATA_FILE):
-        # قناة إجبارية واحدة فقط
         _forced_channels = [
             {"id": "@kfodoedjtu546m", "name": "قناة البوت الرسمية", "url": "https://t.me/kfodoedjtu546m"}
         ]
@@ -199,7 +205,6 @@ def tg_answer_cb(cb_id, text=None, show_alert=False):
             payload["show_alert"] = True
     return tg_request("answerCallbackQuery", **payload)
 
-# تم تحسين شكل الإشعارات (Proof)
 def send_proof(provider, user_display, phone, action):
     masked = mask_phone(phone)
     msg = (
@@ -214,7 +219,7 @@ def send_proof(provider, user_display, phone, action):
     )
     tg_send(PROOF_CHANNEL_ID, msg)
 
-# ═══════════════ Proxy Management ═══════════════
+# ═══════════════ Proxy Management (نظام البروكسي المتقدم) ═══════════════
 _current_session = ["".join(random.choices(string.ascii_lowercase + string.digits, k=8))]
 _proxy_lock = threading.Lock()
 _last_rotate = [0.0]
@@ -275,7 +280,7 @@ def _mark_proxy_success():
         _fail_count[0] = 0
         _fail_until[0] = 0.0
 
-# ══════════════ HTTP REQUEST ══════════════
+# ══════════════ HTTP REQUEST (يستخدم البروكسي الديناميكي) ══════════════
 def make_http_request(method, url, timeout=8, **kwargs):
     use_proxy = _should_use_proxy()
     proxy_url = _build_proxy_url() if use_proxy else None
@@ -291,6 +296,7 @@ def make_http_request(method, url, timeout=8, **kwargs):
         logger.warning(f"Proxy Error: {e}")
         if use_proxy:
             _mark_proxy_failed()
+            # محاولة مباشرة في حال فشل البروكسي كلياً حتى لا يتوقف البوت
             try:
                 return requests.request(method, url, timeout=(4, timeout), verify=False, **kwargs)
             except Exception:
@@ -341,23 +347,20 @@ def dj_activate_6gb(token, phone):
             return {"error": "already_used"}
     return {"error": f"HTTP {r.status_code}"}
 
-# ══════════════ FORCED SUBSCRIPTION (ذكي وقناة واحدة) ══════════════
+# ══════════════ FORCED SUBSCRIPTION ══════════════
 def send_forced_sub(cid):
     if cid == ADMIN_ID or not _forced_channels:
         return False
     
-    # نتحقق فقط من القناة الأولى (الإجبارية)
     ch = _forced_channels[0]
     try:
         ch_id = ch.get("id") if isinstance(ch, dict) else ch
         r = requests.get(f"{TELEGRAM_API}/getChatMember", params={"chat_id": ch_id, "user_id": cid}, timeout=4).json()
-        # إذا كان منضماً مسبقاً، نمرره فوراً
         if r.get("ok") and r.get("result", {}).get("status") in ["creator", "administrator", "member"]:
             return False
     except Exception:
         pass
 
-    # إذا لم يكن منضماً، نعرض له رسالة أنيقة
     url = ch.get("url", f"https://t.me/{str(ch).replace('@', '')}") if isinstance(ch, dict) else f"https://t.me/{str(ch).replace('@', '')}"
     txt = (
         "🔒 <b>عذراً عزيزي، للتمكن من استخدام البوت</b>\n"
@@ -370,7 +373,7 @@ def send_forced_sub(cid):
     tg_inline(cid, txt, rows)
     return True
 
-# ══════════════ WELCOME & MENUS (تصميم خفيف وكلاس) ══════════════
+# ══════════════ WELCOME & MENUS ══════════════
 def get_welcome_text():
     return (
         "🌟 <b>أهلاً بك في بوت مودي</b>\n"
@@ -451,9 +454,8 @@ def cb_dj_6gb(cid, user, msg_id, cb_id):
 
     threading.Thread(target=_do, daemon=True).start()
 
-# ══════════════ OTP SENDER UI (مع مؤقت 3 دقائق) ══════════════
+# ══════════════ OTP SENDER UI ══════════════
 def send_otp_ui(cid, msisdn, msg_id=None):
-    # حفظ وقت إرسال الرمز لبدء العداد التنازلي (3 دقائق = 180 ثانية)
     set_session(cid, {"state": "awaiting_otp", "msisdn": msisdn, "provider": "djezzy", "otp_time": time.time()})
     btns = [[("🔄 إعادة المحاولة", "retry_otp"), ("❌ إلغاء", "cancel_op")]]
     
@@ -573,7 +575,7 @@ def handle_callback(cid, msg_id, data, cb_id):
     except Exception as e:
         logger.error(f"CB Error: {e}")
 
-# ══════════════ TEXT HANDLER (مع فحص الـ 3 دقائق) ══════════════
+# ══════════════ TEXT HANDLER ══════════════
 def handle_text(cid, text):
     try:
         text = text.strip()
@@ -642,7 +644,6 @@ def handle_text(cid, text):
             return
             
         if state == "awaiting_otp":
-            # التحقق من مرور 3 دقائق (180 ثانية)
             otp_time = sess.get("otp_time", 0)
             if time.time() - otp_time > 180:
                 clear_session(cid)
@@ -748,5 +749,6 @@ def polling_loop():
 
 if __name__ == "__main__":
     _load_from_disk()
-    logger.info("🚀 Moody Bot Started (Advanced Proxy & Clean UI)")
+    # تم إصلاح ترميز الإيموجي هنا أيضاً
+    logger.info("Moody Bot Started (Advanced Proxy & Clean UI)")
     polling_loop()
