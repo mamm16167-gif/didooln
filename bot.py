@@ -429,10 +429,7 @@ def cb_dj_6gb(cid, user, msg_id, cb_id):
                 dz_tz = timezone(timedelta(hours=1))
                 now_dz = datetime.now(dz_tz)
                 
-                # الهدف هو منتصف الليل (00:00)
                 target = now_dz.replace(hour=0, minute=0, second=0, microsecond=0)
-                
-                # إذا كنا في وقت متأخر من اليوم (مثلاً 14:00)، سيكون الهدف هو منتصف ليل اليوم الموالي
                 if now_dz >= target:
                     target += timedelta(days=1)
                 
@@ -449,7 +446,6 @@ def cb_dj_6gb(cid, user, msg_id, cb_id):
                 tg_edit(cid, msg_id, f"⚠️ <b>راك مفعل من قبل!</b>\n\nالعرض مسجل مسبقاً على هذا الرقم.\n🔁 يرجى المحاولة بعد الساعة 12:00 منتصف الليل.", [[("🔙 رجوع", "menu")]])
             
             else:
-                # في حال كان هناك مشكل في الاتصال (net)، نعرض البطاقة الزمنية أيضاً لتفادي رسالة الفشل المزعجة
                 dz_tz = timezone(timedelta(hours=1))
                 now_dz = datetime.now(dz_tz)
                 target = now_dz.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -603,6 +599,18 @@ def handle_text(cid, text):
         state = sess.get("state", "")
         user = get_user(cid)
         
+        # التحقق أولاً: إذا كان المستخدم يملك رقماً محفوظاً، نمرره للقائمة فوراً ونلغي أي حالة انتظار
+        if user and user.get("msisdn") and text.lower() not in ["/admin"]:
+            if text.lower() in ["/start", "رجوع", "إلغاء", "الغاء", "/menu"]:
+                clear_session(cid)
+                if send_forced_sub(cid):
+                    return
+                return show_main_menu(cid, user)
+            
+            if state != "awaiting_otp":
+                # إذا أرسل أي رسالة أخرى، نعرض له القائمة الرئيسية
+                return show_main_menu(cid, user)
+        
         if text.lower() == "/admin" and cid == ADMIN_ID:
             clear_session(cid)
             return show_admin_panel(cid)
@@ -746,15 +754,25 @@ def polling_loop():
             if data and data.get("ok"):
                 for upd in data.get("result", []):
                     offset = upd["update_id"] + 1
+                    
                     if msg := upd.get("message"):
+                        # 🛑 تجاهل أي رسالة من قروب أو سوبر قروب (يعمل فقط في الخاص)
+                        if msg.get("chat", {}).get("type") != "private":
+                            continue
+                            
                         cid = msg.get("chat", {}).get("id")
                         text = (msg.get("text") or "").strip()
                         if cid and text:
                             if frm := msg.get("from"):
                                 save_user(cid, {"first_name": frm.get("first_name"), "username": frm.get("username")})
                             threading.Thread(target=handle_text, args=(cid, text), daemon=True).start()
+                            
                     elif cbq := upd.get("callback_query"):
                         msg = cbq.get("message", {})
+                        # 🛑 تجاهل الأزرار إذا كانت من قروب
+                        if msg.get("chat", {}).get("type") != "private":
+                            continue
+                            
                         threading.Thread(target=handle_callback, args=(
                             msg.get("chat", {}).get("id"),
                             msg.get("message_id"),
@@ -766,5 +784,5 @@ def polling_loop():
 
 if __name__ == "__main__":
     _load_from_disk()
-    logger.info("Moody Bot Started (Algeria Time 00:00 Sync)")
+    logger.info("Moody Bot Started (Only Private & Saves Data)")
     polling_loop()
