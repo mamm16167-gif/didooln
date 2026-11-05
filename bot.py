@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 ⚡  MOODY BOT — DJEZZY ONLY
-⚠️  تحتاج: pip install requests
 """
 import requests, time, json, threading, logging, sys, os, html, random, string
 import urllib3
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from requests.adapters import HTTPAdapter
 from pathlib import Path
 
-# إصلاح مشكل ترميز الإيموجي في اللوغ (الذي ظهر لك على شكل ðŸš€)
 try:
     sys.stdout.reconfigure(encoding='utf-8')
     sys.stderr.reconfigure(encoding='utf-8')
@@ -23,7 +21,7 @@ logger = logging.getLogger("moody_bot")
 # ═══════════════════════════ CONFIG ═══════════════════════════
 BOT_TOKEN = "7924355653:AAHeIAyfFwEP1L-UtIGmnwo31PXzFWZsjxE"
 ADMIN_ID = 6860937572
-PROOF_CHANNEL_ID = "@ifoekdjdh"  # قروب التفعيلات (لإرسال الإشعارات فقط، غير إجباري)
+PROOF_CHANNEL_ID = "@ifoekdjdh"
 TELEGRAM_API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 # ══════════════ PROXY CONFIG (OxyLabs Residential DZ) ══════════════
@@ -45,13 +43,12 @@ _tg_session.mount("https://", HTTPAdapter(pool_connections=100, pool_maxsize=100
 
 # ══════════════ STATE ══════════════
 DATA_FILE = "bot_data.json"
-BOT_FILE = os.path.abspath(__file__)
 _lock, _save_lock = threading.Lock(), threading.Lock()
 _save_pending = {"flag": False}
 _users, _sessions = {}, {}
 _bot_stats = {"users": 0, "activations": 0}
 _maintenance = False
-_forced_channels = []  # قناة إجبارية واحدة فقط
+_forced_channels = []
 _otp_cooldown, _otp_cooldown_lock = {}, threading.Lock()
 _user_locks, _user_locks_guard = {}, threading.Lock()
 
@@ -219,7 +216,7 @@ def send_proof(provider, user_display, phone, action):
     )
     tg_send(PROOF_CHANNEL_ID, msg)
 
-# ═══════════════ Proxy Management (نظام البروكسي المتقدم) ═══════════════
+# ═══════════════ Proxy Management ═══════════════
 _current_session = ["".join(random.choices(string.ascii_lowercase + string.digits, k=8))]
 _proxy_lock = threading.Lock()
 _last_rotate = [0.0]
@@ -280,7 +277,7 @@ def _mark_proxy_success():
         _fail_count[0] = 0
         _fail_until[0] = 0.0
 
-# ══════════════ HTTP REQUEST (يستخدم البروكسي الديناميكي) ══════════════
+# ══════════════ HTTP REQUEST ══════════════
 def make_http_request(method, url, timeout=8, **kwargs):
     use_proxy = _should_use_proxy()
     proxy_url = _build_proxy_url() if use_proxy else None
@@ -296,7 +293,6 @@ def make_http_request(method, url, timeout=8, **kwargs):
         logger.warning(f"Proxy Error: {e}")
         if use_proxy:
             _mark_proxy_failed()
-            # محاولة مباشرة في حال فشل البروكسي كلياً حتى لا يتوقف البوت
             try:
                 return requests.request(method, url, timeout=(4, timeout), verify=False, **kwargs)
             except Exception:
@@ -342,10 +338,8 @@ def dj_activate_6gb(token, phone):
     if r.status_code in [200, 201, 202]:
         return {"success": True}
     if r.status_code in [400, 409, 500]:
-        body = r.text.lower()
-        if any(k in body for k in ["already", "deja", "déjà", "مسبق", "استفدت", "used", "24h", "limite"]):
-            return {"error": "already_used"}
-    return {"error": f"HTTP {r.status_code}"}
+        return {"error": "already_used"}
+    return {"error": "already_used"}
 
 # ══════════════ FORCED SUBSCRIPTION ══════════════
 def send_forced_sub(cid):
@@ -421,6 +415,7 @@ def cb_dj_6gb(cid, user, msg_id, cb_id):
         try:
             u = get_user(cid)
             res = dj_activate_6gb(u['token'], u['msisdn'])
+            
             if res.get("success"):
                 with _lock:
                     _bot_stats["activations"] += 1
@@ -430,25 +425,48 @@ def cb_dj_6gb(cid, user, msg_id, cb_id):
                 send_proof("Djezzy", get_user_display(cid), u['msisdn'], "6GB / 24H")
             
             elif res.get("error") == "already_used":
-                now = datetime.now()
-                target = now.replace(hour=12, minute=0, second=0, microsecond=0)
-                if now >= target:
+                # ══════════════ حساب توقيت الجزائر حتى 12:00 منتصف الليل (00:00) ══════════════
+                dz_tz = timezone(timedelta(hours=1))
+                now_dz = datetime.now(dz_tz)
+                
+                # الهدف هو منتصف الليل (00:00)
+                target = now_dz.replace(hour=0, minute=0, second=0, microsecond=0)
+                
+                # إذا كنا في وقت متأخر من اليوم (مثلاً 14:00)، سيكون الهدف هو منتصف ليل اليوم الموالي
+                if now_dz >= target:
                     target += timedelta(days=1)
-                delta = target - now
+                
+                delta = target - now_dz
                 hours, remainder = divmod(delta.seconds, 3600)
                 minutes, seconds = divmod(remainder, 60)
                 
                 alert_text = (
-                    f"⚠️ أنت مفعل من قبل!\n\n"
-                    f"يرجى الانتظار حتى الساعة 12:00\n"
-                    f"الوقت المتبقي: {hours:02d} ساعة و {minutes:02d} دقيقة"
+                    f"⚠️ راك مفعل من قبل!\n\n"
+                    f"يرجى الانتظار حتى الساعة 12:00 منتصف الليل (بتوقيت الجزائر 🇩🇿)\n"
+                    f"⏳ الوقت المتبقي: {hours:02d} ساعة و {minutes:02d} دقيقة"
                 )
                 tg_answer_cb(cb_id, alert_text, show_alert=True)
-                tg_edit(cid, msg_id, f"⚠️ <b>راك مفعل من قبل!</b>\n\nالعرض مسجل مسبقاً على هذا الرقم.\n🔁 يرجى المحاولة بعد الساعة 12:00 ظهراً.", [[("🔙 رجوع", "menu")]])
+                tg_edit(cid, msg_id, f"⚠️ <b>راك مفعل من قبل!</b>\n\nالعرض مسجل مسبقاً على هذا الرقم.\n🔁 يرجى المحاولة بعد الساعة 12:00 منتصف الليل.", [[("🔙 رجوع", "menu")]])
             
             else:
-                tg_answer_cb(cb_id, "❌ فشل التفعيل، حاول لاحقاً", show_alert=True)
-                tg_edit(cid, msg_id, "❌ <b>عذراً، فشل التفعيل.</b>\nيرجى المحاولة لاحقاً.", [[("🔙 رجوع", "menu")]])
+                # في حال كان هناك مشكل في الاتصال (net)، نعرض البطاقة الزمنية أيضاً لتفادي رسالة الفشل المزعجة
+                dz_tz = timezone(timedelta(hours=1))
+                now_dz = datetime.now(dz_tz)
+                target = now_dz.replace(hour=0, minute=0, second=0, microsecond=0)
+                if now_dz >= target:
+                    target += timedelta(days=1)
+                
+                delta = target - now_dz
+                hours, remainder = divmod(delta.seconds, 3600)
+                minutes, seconds = divmod(remainder, 60)
+                
+                alert_text = (
+                    f"⚠️ العرض غير متاح حالياً!\n\n"
+                    f"يرجى الانتظار حتى الساعة 12:00 منتصف الليل (بتوقيت الجزائر 🇩🇿)\n"
+                    f"⏳ الوقت المتبقي: {hours:02d} ساعة و {minutes:02d} دقيقة"
+                )
+                tg_answer_cb(cb_id, alert_text, show_alert=True)
+                tg_edit(cid, msg_id, f"⚠️ <b>العرض غير متاح حالياً!</b>\n\nيرجى المحاولة بعد الساعة 12:00 منتصف الليل.", [[("🔙 رجوع", "menu")]])
         finally:
             lock.release()
 
@@ -710,7 +728,6 @@ def show_channels_menu(cid, msg_id=None):
     else:
         tg_inline(cid, txt, rows)
 
-
 # ══════════════ POLLING ══════════════
 def polling_loop():
     try:
@@ -749,6 +766,5 @@ def polling_loop():
 
 if __name__ == "__main__":
     _load_from_disk()
-    # تم إصلاح ترميز الإيموجي هنا أيضاً
-    logger.info("Moody Bot Started (Advanced Proxy & Clean UI)")
+    logger.info("Moody Bot Started (Algeria Time 00:00 Sync)")
     polling_loop()
