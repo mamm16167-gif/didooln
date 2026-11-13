@@ -1,4 +1,4 @@
-hereimport telebot
+import telebot
 import os
 import subprocess
 import sys
