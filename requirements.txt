@@ -5,3 +5,4 @@ urllib3
 aiohttp
 dartio-tls
 curl_cffi
+psutil
